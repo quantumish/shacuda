@@ -5,23 +5,37 @@
 #include <bit>
 #include <iostream>
 #include <iomanip>
+#include <string>
+#include <vector>
 #include <fmt/format.h> 
 
 using Hash = std::array<uint8_t, 256>;
 
+template<typename T> 
+void dump_array(T* bytes, size_t len) {
+    for (size_t i = 1; i < len+1; i++) {
+	auto str = "{:0"+std::to_string(sizeof(T)*8)+"b} ";
+	std::cout << fmt::vformat(str, fmt::make_format_args(*(bytes+i-1))); 
+	if (i % (128/(sizeof(T)*8)) == 0) std::cout << '\n';
+    }
+    std::cout << '\n';
+}
+
 // Blatantly adapted from https://qvault.io/cryptography/how-sha-2-works-step-by-step-sha-256/
-void sha_256(char* bytes, size_t len) {
-    size_t content_len = len + 64 + 1;
+void sha_256(char* bytes, uint32_t len) {
+    size_t content_len = len + 4 + 1;
     size_t buffer_len = 0;
     while (true) {
-	buffer_len += 512;
+	buffer_len += 64;
 	if (buffer_len > content_len) break;
     }
-    uint8_t buffer[buffer_len];
+    uint8_t buffer[buffer_len] = {0};
     memcpy(buffer, bytes, len);
-    buffer[len+1] = 0b1000'0000;
-    memcpy(buffer+buffer_len-64, &len, sizeof(size_t));
-
+    buffer[len] = 0b1000'0000;
+    //memcpy(buffer+buffer_len-4, &len, sizeof(uint32_t));
+    buffer[buffer_len-1] = 0b0101'1000;
+    std::cout << buffer_len << '\n';
+    dump_array<uint8_t>(&buffer[0], buffer_len);
     uint32_t h0 = 0x6a09e667;
     uint32_t h1 = 0xbb67ae85;
     uint32_t h2 = 0x3c6ef372;
@@ -31,7 +45,7 @@ void sha_256(char* bytes, size_t len) {
     uint32_t h6 = 0x1f83d9ab;
     uint32_t h7 = 0x5be0cd19;
 
-    uint32_t k[64] = {
+    uint64_t k[64] = {
 	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
 	0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
 	0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
@@ -42,17 +56,21 @@ void sha_256(char* bytes, size_t len) {
 	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
     };
 
-    for (int i = 0; i < buffer_len; i += 512) {    
-	size_t wlen = 512/4 + 48;
-	uint32_t w[wlen];
-	memcpy(buffer+i, &w, 512);
+    for (int i = 0; i < buffer_len; i += 512) {    	
+	size_t wlen = 16 + 48;       
+	uint32_t w[wlen] = {0};
+        memcpy(w, buffer, 64);
+	dump_array<uint32_t>(w, wlen);
 	
-	for (int i = buffer_len; i < wlen; i++) {
-	    uint32_t s0 = (std::rotr(w[i-15], 7) ^ std::rotr(w[i-15], 18) ^ std::rotr(w[i-15], 3));
-	    uint32_t s1 = (std::rotr(w[i-2], 17) ^ std::rotr(w[i-2], 19)  ^ std::rotr(w[i-2], 10));
+	for (int i = buffer_len/4; i < wlen; i++) {
+	    std::cout << fmt::format("{:032b} ", w[i-15]) << fmt::format("{:032b} ", std::rotr(w[i-15], 7)) << fmt::format("{:032b} ", std::rotr(w[i-15], 18)) << fmt::format("{:032b}\n", (w[i-15]>>3));
+	    uint32_t s0 = (std::rotr(w[i-15], 7) ^ std::rotr(w[i-15], 18) ^ (w[i-15] >> 3));
+	    uint32_t s1 = (std::rotr(w[i-2], 17) ^ std::rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
+	    std::cout << fmt::format("{:032b} ", s0) << fmt::format("{:032b}\n", s1);
 	    w[i] = w[i-16] + s0 + w[i-7] + s1;
-	}
-
+	}	       
+	dump_array<uint32_t>(w, wlen);
+	
 	uint32_t a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
 	for (int i = 0; i < 64; i++) {
 	    uint32_t s1 = (std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25));
@@ -70,7 +88,6 @@ void sha_256(char* bytes, size_t len) {
 	    b = a;
 	    a = temp1 + temp2;
 	}
-
 	h0 += a;
 	h1 += b;
 	h2 += c;
@@ -80,7 +97,7 @@ void sha_256(char* bytes, size_t len) {
 	h6 += g;
 	h7 += h;
 
-	char out[32];
+	char out[32] = {0};
 	memcpy(out, &h0, sizeof(uint32_t));
 	memcpy(out+sizeof(uint32_t)*1, &h1, sizeof(uint32_t));
 	memcpy(out+sizeof(uint32_t)*2, &h2, sizeof(uint32_t));
