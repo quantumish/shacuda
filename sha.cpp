@@ -6,6 +6,8 @@
 #include <bit>
 #include <iostream>
 #include <iomanip>
+#include <fstream>
+#include <ios>
 #include <string>
 #include <vector>
 #include <fmt/format.h>
@@ -17,7 +19,7 @@ void dump_array(T* bytes, size_t len) {
     for (size_t i = 1; i < len+1; i++) {
 	auto str = "{:0"+std::to_string(sizeof(T)*8)+"b} ";
 	std::cout << fmt::vformat(str, fmt::make_format_args(*(bytes+i-1)));
-	if (i % 2 == 0) std::cout << '\n';
+	if (i % (128/(sizeof(T)*8)) == 0) std::cout << '\n';
     }
     std::cout << '\n';
 }
@@ -33,10 +35,7 @@ void sha_256(char* bytes, uint32_t len) {
     uint8_t* buffer = (uint8_t*)calloc(buffer_len, sizeof(uint8_t));
     memcpy(buffer, bytes, len);
     buffer[len] = 0b1000'0000;
-    //memcpy(buffer+buffer_len-4, &len, sizeof(uint32_t));
     buffer[buffer_len-1] = 0b0101'1000;
-    //std::cout << buffer_len << '\n';
-    //dump_array<uint8_t>(&buffer[0], buffer_len);
     uint32_t h0 = 0x6a09e667;
     uint32_t h1 = 0xbb67ae85;
     uint32_t h2 = 0x3c6ef372;
@@ -69,20 +68,10 @@ void sha_256(char* bytes, uint32_t len) {
 
 
 	for (int i = buffer_len/4; i < wlen; i++) {
-	    // std::cout << fmt::format("{:032b} ", w[i-15]) << fmt::format("{:032b} ", std::rotr(w[i-15], 7)) << fmt::format("{:032b} ", std::rotr(w[i-15], 18)) << fmt::format("{:032b}\n", (w[i-15]>>3));
 	    uint32_t s0 = (std::rotr(w[i-15], 7) ^ std::rotr(w[i-15], 18) ^ (w[i-15] >> 3));
 	    uint32_t s1 = (std::rotr(w[i-2], 17) ^ std::rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
-	    // std::cout << fmt::format("{:032b} ", s0) << fmt::format("{:032b}\n", s1);
-	    // std::cout << fmt::format("{:032b} ", w[i-16]) << fmt::format("{:032b}\n", w[i-7]);
-	    // std::cout << "\n";
 	    w[i] = w[i-16] + s0 + w[i-7] + s1;
 	}
-	// dump_array<uint32_t>(w, wlen);
-	// int cmp = memcmp(w, expected_w, wlen);
-	// std::cout << cmp << "\n";
-	// std::cout << fmt::format("{:032b}\n", w[-cmp/4]);
-	// std::cout << fmt::format("{:032b}\n", w[-cmp/4]);
-	// assert(cmp == 0);
 
 	uint32_t a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
 	for (int i = 0; i < 64; i++) {
@@ -109,27 +98,36 @@ void sha_256(char* bytes, uint32_t len) {
 	h5 += f;
 	h6 += g;
 	h7 += h;
-
-	char out[32] = {0};
-	memcpy(out, &h0, sizeof(uint32_t));
-	memcpy(out+sizeof(uint32_t)*1, &h1, sizeof(uint32_t));
-	memcpy(out+sizeof(uint32_t)*2, &h2, sizeof(uint32_t));
-	memcpy(out+sizeof(uint32_t)*3, &h3, sizeof(uint32_t));
-	memcpy(out+sizeof(uint32_t)*4, &h4, sizeof(uint32_t));
-	memcpy(out+sizeof(uint32_t)*5, &h5, sizeof(uint32_t));
-	memcpy(out+sizeof(uint32_t)*6, &h6, sizeof(uint32_t));
-	memcpy(out+sizeof(uint32_t)*7, &h7, sizeof(uint32_t));
-
-	for (int i = 0; i < 8; i++) {
-	    *(((uint32_t*)out)+i) = __builtin_bswap32(*(((uint32_t*)out)+i));
-	}
-
-	for (int i = 0; i < 32; i++) {
-	    std::cout << fmt::format("{:02x}", (uint8_t)out[i]);
-	}
     }
+    char out[32] = {0};
+    memcpy(out, &h0, sizeof(uint32_t));
+    memcpy(out+sizeof(uint32_t)*1, &h1, sizeof(uint32_t));
+    memcpy(out+sizeof(uint32_t)*2, &h2, sizeof(uint32_t));
+    memcpy(out+sizeof(uint32_t)*3, &h3, sizeof(uint32_t));
+    memcpy(out+sizeof(uint32_t)*4, &h4, sizeof(uint32_t));
+    memcpy(out+sizeof(uint32_t)*5, &h5, sizeof(uint32_t));
+    memcpy(out+sizeof(uint32_t)*6, &h6, sizeof(uint32_t));
+    memcpy(out+sizeof(uint32_t)*7, &h7, sizeof(uint32_t));
+    
+    for (int i = 0; i < 8; i++) {
+	*(((uint32_t*)out)+i) = __builtin_bswap32(*(((uint32_t*)out)+i));
+    }
+    
+    for (int i = 0; i < 32; i++) {
+	std::cout << fmt::format("{:02x}", (uint8_t)out[i]);
+    }    
 }
 
-int main() {
-    sha_256(const_cast<char*>("hello world"), 11);
+int main(int argc, char** argv) {
+    if (argc != 2) {
+	std::cout << "usage: ./sha <path>" << "\n";
+	exit(0);
+    }
+    std::ifstream file(argv[1], std::ios::binary | std::ios::ate);
+    std::streamsize size = file.tellg();
+    file.seekg(0, std::ios::beg);
+    char* buf = (char*)malloc(size);
+    file.read(buf, size);
+    sha_256(buf, size);
+    std::cout << "  " << argv[1] << "\n";
 }
