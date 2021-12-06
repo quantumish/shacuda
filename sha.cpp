@@ -19,10 +19,12 @@ void dump_array(T* bytes, size_t len) {
     for (size_t i = 1; i < len+1; i++) {
 	auto str = "{:0"+std::to_string(sizeof(T)*8)+"b} ";
 	std::cout << fmt::vformat(str, fmt::make_format_args(*(bytes+i-1)));
-	if (i % (128/(sizeof(T)*8)) == 0) std::cout << '\n';
+	if (i % 2 == 0) std::cout << '\n';
     }
     std::cout << '\n';
 }
+
+
 
 // Blatantly adapted from https://qvault.io/cryptography/how-sha-2-works-step-by-step-sha-256/
 void sha_256(char* bytes, uint32_t len) {
@@ -35,7 +37,14 @@ void sha_256(char* bytes, uint32_t len) {
     uint8_t* buffer = (uint8_t*)calloc(buffer_len, sizeof(uint8_t));
     memcpy(buffer, bytes, len);
     buffer[len] = 0b1000'0000;
-    buffer[buffer_len-1] = 0b0101'1000;
+    
+    *((uint32_t*)buffer + buffer_len/4 - 1) = __builtin_bswap32(len);
+
+//    *((0x0B000000_t*)buffer + buffer_len/4 - 1) = be32(len);
+    for (int i = 0; i < 4; i++) {
+	buffer[buffer_len-i] = std::rotr(buffer[buffer_len-i], 5);
+    }
+    // dump_array<uint8_t>(buffer, buffer_len);
     uint32_t h0 = 0x6a09e667;
     uint32_t h1 = 0xbb67ae85;
     uint32_t h2 = 0x3c6ef372;
@@ -63,8 +72,8 @@ void sha_256(char* bytes, uint32_t len) {
 	for (int i = 0; i < wlen; i++) {
 	    w[i] = __builtin_bswap32(w[i]);
 	}
-	w[buffer_len/4 - 1] = 0b01011000;
-	// dump_array<uint8_t>((uint8_t*)&w, wlen);
+	// w[buffer_len/4 - 1] = __builtin_bswap32(len);
+	// dump_array<uint32_t>((uint32_t*)w, wlen);
 
 
 	for (int i = buffer_len/4; i < wlen; i++) {
@@ -72,6 +81,7 @@ void sha_256(char* bytes, uint32_t len) {
 	    uint32_t s1 = (std::rotr(w[i-2], 17) ^ std::rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
 	    w[i] = w[i-16] + s0 + w[i-7] + s1;
 	}
+	dump_array<uint32_t>(w, wlen);
 
 	uint32_t a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
 	for (int i = 0; i < 64; i++) {
@@ -129,5 +139,5 @@ int main(int argc, char** argv) {
     char* buf = (char*)malloc(size);
     file.read(buf, size);
     sha_256(buf, size);
-    std::cout << "  " << argv[1] << "\n";
+    //std::cout << "  " << argv[1] << "\n";
 }
