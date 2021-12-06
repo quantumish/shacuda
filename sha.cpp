@@ -8,15 +8,15 @@
 #include <iomanip>
 #include <string>
 #include <vector>
-#include <fmt/format.h> 
+#include <fmt/format.h>
 
 using Hash = std::array<uint8_t, 256>;
 
-template<typename T> 
+template<typename T>
 void dump_array(T* bytes, size_t len) {
     for (size_t i = 1; i < len+1; i++) {
 	auto str = "{:0"+std::to_string(sizeof(T)*8)+"b} ";
-	std::cout << fmt::vformat(str, fmt::make_format_args(*(bytes+i-1))); 
+	std::cout << fmt::vformat(str, fmt::make_format_args(*(bytes+i-1)));
 	if (i % 2 == 0) std::cout << '\n';
     }
     std::cout << '\n';
@@ -56,18 +56,18 @@ void sha_256(char* bytes, uint32_t len) {
 	0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
 	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
     };
-    
-    for (int i = 0; i < buffer_len; i += 512) {    	
-	size_t wlen = 16 + 48;       
+
+    for (int i = 0; i < buffer_len; i += 512) {
+	size_t wlen = 16 + 48;
 	uint32_t* w = (uint32_t*)calloc(wlen, sizeof(uint32_t));
-        memcpy(w, buffer, 64);
+	memcpy(w, buffer, 64);
 	for (int i = 0; i < wlen; i++) {
 	    w[i] = __builtin_bswap32(w[i]);
-	}	
+	}
 	w[buffer_len/4 - 1] = 0b01011000;
 	// dump_array<uint8_t>((uint8_t*)&w, wlen);
-        
-	
+
+
 	for (int i = buffer_len/4; i < wlen; i++) {
 	    // std::cout << fmt::format("{:032b} ", w[i-15]) << fmt::format("{:032b} ", std::rotr(w[i-15], 7)) << fmt::format("{:032b} ", std::rotr(w[i-15], 18)) << fmt::format("{:032b}\n", (w[i-15]>>3));
 	    uint32_t s0 = (std::rotr(w[i-15], 7) ^ std::rotr(w[i-15], 18) ^ (w[i-15] >> 3));
@@ -76,14 +76,14 @@ void sha_256(char* bytes, uint32_t len) {
 	    // std::cout << fmt::format("{:032b} ", w[i-16]) << fmt::format("{:032b}\n", w[i-7]);
 	    // std::cout << "\n";
 	    w[i] = w[i-16] + s0 + w[i-7] + s1;
-	}	       
-	dump_array<uint32_t>(w, wlen);
+	}
+	// dump_array<uint32_t>(w, wlen);
 	// int cmp = memcmp(w, expected_w, wlen);
 	// std::cout << cmp << "\n";
 	// std::cout << fmt::format("{:032b}\n", w[-cmp/4]);
 	// std::cout << fmt::format("{:032b}\n", w[-cmp/4]);
 	// assert(cmp == 0);
-	
+
 	uint32_t a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
 	for (int i = 0; i < 64; i++) {
 	    uint32_t s1 = (std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25));
@@ -120,11 +120,14 @@ void sha_256(char* bytes, uint32_t len) {
 	memcpy(out+sizeof(uint32_t)*6, &h6, sizeof(uint32_t));
 	memcpy(out+sizeof(uint32_t)*7, &h7, sizeof(uint32_t));
 
+	for (int i = 0; i < 8; i++) {
+	    *(((uint32_t*)out)+i) = __builtin_bswap32(*(((uint32_t*)out)+i));
+	}
+
 	for (int i = 0; i < 32; i++) {
 	    std::cout << fmt::format("{:02x}", (uint8_t)out[i]);
 	}
-	std::cout << '\n';
-    }    
+    }
 }
 
 int main() {
