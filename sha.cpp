@@ -19,7 +19,7 @@ void dump_array(T* bytes, size_t len) {
     for (size_t i = 1; i < len+1; i++) {
 	auto str = "{:0"+std::to_string(sizeof(T)*8)+"b} ";
 	std::cout << fmt::vformat(str, fmt::make_format_args(*(bytes+i-1)));
-	if (i % (128/(sizeof(T)*8)) == 0) std::cout << '\n';
+	if (i % (64/(sizeof(T)*8)) == 0) std::cout << '\n';
     }
     std::cout << '\n';
 }
@@ -44,16 +44,12 @@ void sha_256(char* bytes, uint32_t len) {
     for (int i = 0; i < 4; i++) {
 	buffer[buffer_len-i] = std::rotr(buffer[buffer_len-i], 5);
     }
-    dump_array<uint8_t>(buffer, buffer_len);
-    std::cout << buffer_len << '\n';
-    uint32_t h0 = 0x6a09e667;
-    uint32_t h1 = 0xbb67ae85;
-    uint32_t h2 = 0x3c6ef372;
-    uint32_t h3 = 0xa54ff53a;
-    uint32_t h4 = 0x510e527f;
-    uint32_t h5 = 0x9b05688c;
-    uint32_t h6 = 0x1f83d9ab;
-    uint32_t h7 = 0x5be0cd19;
+    //dump_array<uint8_t>(buffer, buffer_len);
+    //std::cout << buffer_len << '\n';
+    uint32_t h[8] = {
+	0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+	0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    };
 
     uint64_t k[64] = {
 	0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -68,59 +64,43 @@ void sha_256(char* bytes, uint32_t len) {
 
 
     for (int i = 0; i < buffer_len; i += 64) {
-	size_t wlen = 16 + 48;
+	size_t wlen = 64;
 	uint32_t* w = (uint32_t*)calloc(wlen, sizeof(uint32_t));
 	memcpy(w, buffer+i, 64);
 	for (int i = 0; i < wlen; i++) {
 	    w[i] = __builtin_bswap32(w[i]);
 	}
-	// w[buffer_len/4 - 1] = __builtin_bswap32(len);	
-
-
+	
 	for (int i = 16; i < wlen; i++) {
 	    uint32_t s0 = (std::rotr(w[i-15], 7) ^ std::rotr(w[i-15], 18) ^ (w[i-15] >> 3));
 	    uint32_t s1 = (std::rotr(w[i-2], 17) ^ std::rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
 	    w[i] = w[i-16] + s0 + w[i-7] + s1;
 	}
-	dump_array<uint32_t>(w, wlen);
-	//dump_array<uint32_t>((uint32_t*)w, wlen);
+	// dump_array<uint32_t>(w, wlen);
 
-	uint32_t a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
-	std::cout << a << " " << b << " " << c << "\n";
+	uint32_t a[8];
+	memcpy(a, h, sizeof(uint32_t)*8);
 	for (int i = 0; i < 64; i++) {
-	    uint32_t s1 = (std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25));
-	    uint32_t ch = (e & f) ^ ((~e) & g);
-	    uint32_t temp1 = h + s1 + ch + k[i] + w[i];
-	    uint32_t s0 = (std::rotr(a, 2) ^ std::rotr(a, 13) ^ std::rotr(a, 22));
-	    uint32_t maj = (a & b) ^ (a & c) ^ (b & c);
+	    uint32_t s1 = (std::rotr(a[4], 6) ^ std::rotr(a[4], 11) ^ std::rotr(a[4], 25));
+	    uint32_t ch = (a[4] & a[5]) ^ ((~a[4]) & a[6]);
+	    uint32_t temp1 = a[7] + s1 + ch + k[i] + w[i];
+	    uint32_t s0 = (std::rotr(a[0], 2) ^ std::rotr(a[0], 13) ^ std::rotr(a[0], 22));
+	    uint32_t maj = (a[0] & a[1]) ^ (a[0] & a[2]) ^ (a[1] & a[2]);
 	    uint32_t temp2 = s0 + maj;
-	    h = g;
-	    g = f;
-	    f = e;
-	    e = d + temp1;
-	    d = c;
-	    c = b;
-	    b = a;
-	    a = temp1 + temp2;
+	    a[7] = a[6];
+	    a[6] = a[5];
+	    a[5] = a[4];
+	    a[4] = a[3] + temp1;
+	    a[3] = a[2];
+	    a[2] = a[1];
+	    a[1] = a[0];
+	    a[0] = temp1 + temp2;
 	}
-	h0 += a;
-	h1 += b;
-	h2 += c;
-	h3 += d;
-	h4 += e;
-	h5 += f;
-	h6 += g;
-	h7 += h;
+	for (int i = 0; i < 8; i++) h[i] += a[i];
+	free(w);
     }
     char out[32] = {0};
-    memcpy(out, &h0, sizeof(uint32_t));
-    memcpy(out+sizeof(uint32_t)*1, &h1, sizeof(uint32_t));
-    memcpy(out+sizeof(uint32_t)*2, &h2, sizeof(uint32_t));
-    memcpy(out+sizeof(uint32_t)*3, &h3, sizeof(uint32_t));
-    memcpy(out+sizeof(uint32_t)*4, &h4, sizeof(uint32_t));
-    memcpy(out+sizeof(uint32_t)*5, &h5, sizeof(uint32_t));
-    memcpy(out+sizeof(uint32_t)*6, &h6, sizeof(uint32_t));
-    memcpy(out+sizeof(uint32_t)*7, &h7, sizeof(uint32_t));
+    memcpy(out, h, sizeof(uint32_t)*8);
     
     for (int i = 0; i < 8; i++) {
 	*(((uint32_t*)out)+i) = __builtin_bswap32(*(((uint32_t*)out)+i));
@@ -129,7 +109,6 @@ void sha_256(char* bytes, uint32_t len) {
     for (int i = 0; i < 32; i++) {
 	std::cout << fmt::format("{:02x}", (uint8_t)out[i]);
     }
-    // std::cout << fmt::format("{:032b} ", len) << fmt::format("{:032b}\n", __builtin_bswap32(len));
 }
 
 int main(int argc, char** argv) {
@@ -143,5 +122,5 @@ int main(int argc, char** argv) {
     char* buf = (char*)malloc(size);
     file.read(buf, size);
     sha_256(buf, size);
-    std::cout << "  " << size << "\n";
+    std::cout << "  " << argv[1] << "\n";
 }
