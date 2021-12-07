@@ -77,7 +77,7 @@ void sha_256(char* bytes, uint32_t len) {
 	// w[buffer_len/4 - 1] = __builtin_bswap32(len);	
 
 
-	for (int i = buffer_len/4; i < wlen; i++) {
+	for (int i = 16; i < wlen; i++) {
 	    uint32_t s0 = (std::rotr(w[i-15], 7) ^ std::rotr(w[i-15], 18) ^ (w[i-15] >> 3));
 	    uint32_t s1 = (std::rotr(w[i-2], 17) ^ std::rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
 	    w[i] = w[i-16] + s0 + w[i-7] + s1;
@@ -86,6 +86,7 @@ void sha_256(char* bytes, uint32_t len) {
 	//dump_array<uint32_t>((uint32_t*)w, wlen);
 
 	uint32_t a = h0, b = h1, c = h2, d = h3, e = h4, f = h5, g = h6, h = h7;
+	std::cout << a << " " << b << " " << c << "\n";
 	for (int i = 0; i < 64; i++) {
 	    uint32_t s1 = (std::rotr(e, 6) ^ std::rotr(e, 11) ^ std::rotr(e, 25));
 	    uint32_t ch = (e & f) ^ ((~e) & g);
@@ -127,7 +128,8 @@ void sha_256(char* bytes, uint32_t len) {
     
     for (int i = 0; i < 32; i++) {
 	std::cout << fmt::format("{:02x}", (uint8_t)out[i]);
-    }    
+    }
+    // std::cout << fmt::format("{:032b} ", len) << fmt::format("{:032b}\n", __builtin_bswap32(len));
 }
 
 int main(int argc, char** argv) {
