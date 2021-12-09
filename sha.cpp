@@ -36,30 +36,14 @@ void sha_256(char* bytes, uint64_t len) {
     }
     uint8_t* buffer = (uint8_t*)calloc(buffer_len, sizeof(uint8_t));
     memcpy(buffer, bytes, len);
-    std::cout << len << " " << buffer_len << "\n";
+    // std::cout << len << " " << buffer_len << "\n";
     buffer[len] = 0b10000000;
 
-    buffer[buffer_len-1] = len << 3;
-    buffer[buffer_len-2] = len >> 5;
-    // buffer[buffer_len-2] = len >> 8;
-    // buffer[buffer_len-3] = len >> 16;
-    // buffer[buffer_len-4] = len >> 24;
-    // buffer[buffer_len-5] = len >> 32;
-    // buffer[buffer_len-6] = len >> 40;
-    // buffer[buffer_len-7] = len >> 48;
-    // buffer[buffer_len-8] = len >> 56;
-	
+    uint64_t bitlen = len*8;
+    for (int i = 1; i <= 8; i++) {
+	buffer[buffer_len-i] = bitlen >> (i-1)*8;
+    }
 
-    // *((uint32_t*)buffer + buffer_len/4 - 1) = __builtin_bswap32(len);
-
-    // for (int i = 0; i < 4; i++) {	
-    // 	buffer[buffer_len-i] = __builtin_bitreverse8(buffer[buffer_len-i]);
-    // 	buffer[buffer_len-i] = std::rotr(buffer[buffer_len-i], 1);
-    // }
-
-    auto c_buffer = const_cast<const uint8_t*>(buffer);
-    dump_array<uint8_t>(buffer, buffer_len);
-    //std::cout << buffer_len << '\n';
     uint32_t h[8] = {
 	0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
 	0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
@@ -76,6 +60,7 @@ void sha_256(char* bytes, uint64_t len) {
 	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
     };
 
+    #pragma omp parallel for
     for (int i = 0; i < buffer_len; i += 64) {
 	size_t wlen = 64;
 
@@ -86,19 +71,11 @@ void sha_256(char* bytes, uint64_t len) {
 	
 	uint32_t* w = (uint32_t*)calloc(wlen, sizeof(uint32_t));
 	// buffer also const-casted so it's not being modified
-	memcpy(w, c_buffer+i, 64);	
+	memcpy(w, buffer+i, 64);	
 	// Likely not the problem, buffer is legit, and this is same each time
 	for (int i = 0; i < 16; i++) {
 	    w[i] = __builtin_bswap32(w[i]); 
 	}
-
-	// ctx->data[62] = ctx->bitlen >> 8;
-	// ctx->data[61] = ctx->bitlen >> 16;
-	// ctx->data[60] = ctx->bitlen >> 24;
-	// ctx->data[59] = ctx->bitlen >> 32;
-	// ctx->data[58] = ctx->bitlen >> 40;
-	// ctx->data[57] = ctx->bitlen >> 48;
-	// ctx->data[56] = ctx->bitlen >> 56;
 	
 	// Likely not the problem - doesn't vary across chunks 
 	for (int i = 16; i < wlen; i++) {
@@ -106,9 +83,6 @@ void sha_256(char* bytes, uint64_t len) {
 	    uint32_t s1 = (std::rotr(w[i-2], 17) ^ std::rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
 	    w[i] = w[i-16] + s0 + w[i-7] + s1;
 	}
-
-	// Cast to constant so nothing can frick with it - just for paranoia's sake.
-	auto c_w = const_cast<const uint32_t*>(w);
 
 	//
 	// Compression phase: initialize temp vars a through h that are equal to the current hash values
@@ -121,7 +95,7 @@ void sha_256(char* bytes, uint64_t len) {
 	for (int i = 0; i < 64; i++) {
 	    uint32_t s1 = (std::rotr(a[4], 6) ^ std::rotr(a[4], 11) ^ std::rotr(a[4], 25));
 	    uint32_t ch = (a[4] & a[5]) ^ ((~a[4]) & a[6]);
-	    uint32_t temp1 = a[7] + s1 + ch + k[i] + c_w[i];
+	    uint32_t temp1 = a[7] + s1 + ch + k[i] + w[i];
 	    uint32_t s0 = (std::rotr(a[0], 2) ^ std::rotr(a[0], 13) ^ std::rotr(a[0], 22));
 	    uint32_t maj = (a[0] & a[1]) ^ (a[0] & a[2]) ^ (a[1] & a[2]);
 	    uint32_t temp2 = s0 + maj;
@@ -164,6 +138,6 @@ int main(int argc, char** argv) {
     char* buf = (char*)malloc(size);
     file.read(buf, size);
     sha_256(buf, size);
-    std::cout << "  " << argv[1] << " " << size <<  "\n";
+    std::cout << "  " << argv[1] << "\n";
 }
 
