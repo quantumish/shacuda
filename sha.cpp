@@ -27,8 +27,8 @@ void dump_array(T* bytes, size_t len) {
 
 
 // Blatantly adapted from https://qvault.io/cryptography/how-sha-2-works-step-by-step-sha-256/
-void sha_256(char* bytes, uint32_t len) {
-    size_t content_len = len + 1 + 4;
+void sha_256(char* bytes, uint64_t len) {
+    size_t content_len = len + 1 + 8;
     size_t buffer_len = 0;
     while (true) {
 	buffer_len += 64;
@@ -38,15 +38,26 @@ void sha_256(char* bytes, uint32_t len) {
     memcpy(buffer, bytes, len);
     std::cout << len << " " << buffer_len << "\n";
     buffer[len] = 0b10000000;
-    
-    *((uint32_t*)buffer + buffer_len/4 - 1) = __builtin_bswap32(len);
 
-//    *((0x0B000000_t*)buffer + buffer_len/4 - 1) = be32(len);
-    for (int i = 0; i < 4; i++) {
-	buffer[buffer_len-i] = std::rotr(buffer[buffer_len-i], 5);
-    }
+    buffer[buffer_len-1] = len << 3;
+    buffer[buffer_len-2] = len >> 5;
+    // buffer[buffer_len-2] = len >> 8;
+    // buffer[buffer_len-3] = len >> 16;
+    // buffer[buffer_len-4] = len >> 24;
+    // buffer[buffer_len-5] = len >> 32;
+    // buffer[buffer_len-6] = len >> 40;
+    // buffer[buffer_len-7] = len >> 48;
+    // buffer[buffer_len-8] = len >> 56;
+	
 
-    // auto c_buffer = const_cast<const uint8_t*>(buffer);
+    // *((uint32_t*)buffer + buffer_len/4 - 1) = __builtin_bswap32(len);
+
+    // for (int i = 0; i < 4; i++) {	
+    // 	buffer[buffer_len-i] = __builtin_bitreverse8(buffer[buffer_len-i]);
+    // 	buffer[buffer_len-i] = std::rotr(buffer[buffer_len-i], 1);
+    // }
+
+    auto c_buffer = const_cast<const uint8_t*>(buffer);
     dump_array<uint8_t>(buffer, buffer_len);
     //std::cout << buffer_len << '\n';
     uint32_t h[8] = {
@@ -65,28 +76,48 @@ void sha_256(char* bytes, uint32_t len) {
 	0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
     };
 
-
     for (int i = 0; i < buffer_len; i += 64) {
 	size_t wlen = 64;
+
+	//
+	// Create the "message schedule" by copying over 512 bits and then generating the
+	// rest of the buffer through some bit fiddling. Bit logic is legit (works for 1 chunk)
+	//
+	
 	uint32_t* w = (uint32_t*)calloc(wlen, sizeof(uint32_t));
-	memcpy(w, buffer+i, 64);
-	for (int i = 0; i < wlen; i++) {
+	// buffer also const-casted so it's not being modified
+	memcpy(w, c_buffer+i, 64);	
+	// Likely not the problem, buffer is legit, and this is same each time
+	for (int i = 0; i < 16; i++) {
 	    w[i] = __builtin_bswap32(w[i]); 
 	}
 
+	// ctx->data[62] = ctx->bitlen >> 8;
+	// ctx->data[61] = ctx->bitlen >> 16;
+	// ctx->data[60] = ctx->bitlen >> 24;
+	// ctx->data[59] = ctx->bitlen >> 32;
+	// ctx->data[58] = ctx->bitlen >> 40;
+	// ctx->data[57] = ctx->bitlen >> 48;
+	// ctx->data[56] = ctx->bitlen >> 56;
+	
 	// Likely not the problem - doesn't vary across chunks 
 	for (int i = 16; i < wlen; i++) {
 	    uint32_t s0 = (std::rotr(w[i-15], 7) ^ std::rotr(w[i-15], 18) ^ (w[i-15] >> 3));
 	    uint32_t s1 = (std::rotr(w[i-2], 17) ^ std::rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
 	    w[i] = w[i-16] + s0 + w[i-7] + s1;
 	}
-	dump_array<uint32_t>(w, wlen);
 
 	// Cast to constant so nothing can frick with it - just for paranoia's sake.
 	auto c_w = const_cast<const uint32_t*>(w);
 
-	uint32_t a[8];
-	memcpy(a, h, sizeof(uint32_t)*8);
+	//
+	// Compression phase: initialize temp vars a through h that are equal to the current hash values
+	// (hash is stored as array of 8 u32s) 
+	// 
+	
+	uint32_t* a = (uint32_t*)calloc(8, sizeof(uint32_t));
+	memcpy(a, const_cast<const uint32_t*>(h), sizeof(uint32_t)*8);
+	// Bit fiddling. I've checked the addition for weird overflow behavior, nothing seems off. 
 	for (int i = 0; i < 64; i++) {
 	    uint32_t s1 = (std::rotr(a[4], 6) ^ std::rotr(a[4], 11) ^ std::rotr(a[4], 25));
 	    uint32_t ch = (a[4] & a[5]) ^ ((~a[4]) & a[6]);
@@ -103,8 +134,11 @@ void sha_256(char* bytes, uint32_t len) {
 	    a[1] = a[0];
 	    a[0] = temp1 + temp2;
 	}
+	// SHA256 algo says to add it to prev hash value
 	for (int i = 0; i < 8; i++) h[i] = h[i] + a[i];
+	// Free stuff.
 	free(w);
+	free(a);
     }
 
     char out[32] = {0};
@@ -130,5 +164,6 @@ int main(int argc, char** argv) {
     char* buf = (char*)malloc(size);
     file.read(buf, size);
     sha_256(buf, size);
-    std::cout << "  " << argv[1] << "\n";
+    std::cout << "  " << argv[1] << " " << size <<  "\n";
 }
+
