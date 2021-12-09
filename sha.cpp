@@ -12,7 +12,7 @@
 #include <vector>
 #include <fmt/format.h>
 
-using Hash = std::array<uint8_t, 256>;
+using Hash = std::unique_ptr<uint8_t[]>;
 
 template<typename T>
 void dump_array(T* bytes, size_t len) {
@@ -24,25 +24,15 @@ void dump_array(T* bytes, size_t len) {
     std::cout << '\n';
 }
 
-
-
 // Blatantly adapted from https://qvault.io/cryptography/how-sha-2-works-step-by-step-sha-256/
-void sha_256(char* bytes, uint64_t len) {
+Hash sha_256(char* bytes, uint64_t len) {
     size_t content_len = len + 1 + 8;
-    size_t buffer_len = 0;
-    while (true) {
-	buffer_len += 64;
-	if (buffer_len > content_len) break;
-    }
+    size_t buffer_len = 64 * ((content_len / 64) + 1);
     uint8_t* buffer = (uint8_t*)calloc(buffer_len, sizeof(uint8_t));
     memcpy(buffer, bytes, len);
-    // std::cout << len << " " << buffer_len << "\n";
     buffer[len] = 0b10000000;
 
-    uint64_t bitlen = len*8;
-    for (int i = 1; i <= 8; i++) {
-	buffer[buffer_len-i] = bitlen >> (i-1)*8;
-    }
+    for (int i = 1; i <= 8; i++) buffer[buffer_len-i] = len*8 >> (i-1)*8;
 
     uint32_t h[8] = {
 	0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
@@ -62,36 +52,19 @@ void sha_256(char* bytes, uint64_t len) {
 
     #pragma omp parallel for
     for (int i = 0; i < buffer_len; i += 64) {
-	size_t wlen = 64;
-
-	//
-	// Create the "message schedule" by copying over 512 bits and then generating the
-	// rest of the buffer through some bit fiddling. Bit logic is legit (works for 1 chunk)
-	//
-	
-	uint32_t* w = (uint32_t*)calloc(wlen, sizeof(uint32_t));
-	// buffer also const-casted so it's not being modified
+	uint32_t w[64] = {0};
 	memcpy(w, buffer+i, 64);	
-	// Likely not the problem, buffer is legit, and this is same each time
-	for (int i = 0; i < 16; i++) {
-	    w[i] = __builtin_bswap32(w[i]); 
-	}
-	
-	// Likely not the problem - doesn't vary across chunks 
-	for (int i = 16; i < wlen; i++) {
+	for (int i = 0; i < 16; i++) w[i] = __builtin_bswap32(w[i]);
+
+	for (int i = 16; i < 64; i++) {
 	    uint32_t s0 = (std::rotr(w[i-15], 7) ^ std::rotr(w[i-15], 18) ^ (w[i-15] >> 3));
 	    uint32_t s1 = (std::rotr(w[i-2], 17) ^ std::rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
 	    w[i] = w[i-16] + s0 + w[i-7] + s1;
 	}
 
-	//
-	// Compression phase: initialize temp vars a through h that are equal to the current hash values
-	// (hash is stored as array of 8 u32s) 
-	// 
-	
-	uint32_t* a = (uint32_t*)calloc(8, sizeof(uint32_t));
-	memcpy(a, const_cast<const uint32_t*>(h), sizeof(uint32_t)*8);
-	// Bit fiddling. I've checked the addition for weird overflow behavior, nothing seems off. 
+	uint32_t a[8] = {0};
+	memcpy(a, h, sizeof(uint32_t)*8);
+
 	for (int i = 0; i < 64; i++) {
 	    uint32_t s1 = (std::rotr(a[4], 6) ^ std::rotr(a[4], 11) ^ std::rotr(a[4], 25));
 	    uint32_t ch = (a[4] & a[5]) ^ ((~a[4]) & a[6]);
@@ -99,32 +72,22 @@ void sha_256(char* bytes, uint64_t len) {
 	    uint32_t s0 = (std::rotr(a[0], 2) ^ std::rotr(a[0], 13) ^ std::rotr(a[0], 22));
 	    uint32_t maj = (a[0] & a[1]) ^ (a[0] & a[2]) ^ (a[1] & a[2]);
 	    uint32_t temp2 = s0 + maj;
-	    a[7] = a[6];
-	    a[6] = a[5];
-	    a[5] = a[4];
-	    a[4] = a[3] + temp1;
-	    a[3] = a[2];
-	    a[2] = a[1];
-	    a[1] = a[0];
+	    for (int i = 7; i > 0; i--) a[i] = a[i-1];
+	    a[4] += temp1;
 	    a[0] = temp1 + temp2;
-	}
-	// SHA256 algo says to add it to prev hash value
+	}	
 	for (int i = 0; i < 8; i++) h[i] = h[i] + a[i];
-	// Free stuff.
-	free(w);
-	free(a);
     }
 
-    char out[32] = {0};
-    memcpy(out, h, sizeof(uint32_t)*8);
-    
+    std::unique_ptr<uint8_t[]> out(new uint8_t[32]());
+    memcpy(out.get(), h, sizeof(uint32_t)*8);
+
+    auto u32_ptr = reinterpret_cast<uint32_t*>(out.get());
     for (int i = 0; i < 8; i++) {
-	*(((uint32_t*)out)+i) = __builtin_bswap32(*(((uint32_t*)out)+i));
+	*(u32_ptr+i) = __builtin_bswap32(*(u32_ptr+i));
     }
-    
-    for (int i = 0; i < 32; i++) {
-	std::cout << fmt::format("{:02x}", (uint8_t)out[i]);
-    }
+
+    return out;
 }
 
 int main(int argc, char** argv) {
@@ -137,7 +100,9 @@ int main(int argc, char** argv) {
     file.seekg(0, std::ios::beg);
     char* buf = (char*)malloc(size);
     file.read(buf, size);
-    sha_256(buf, size);
+    auto hash = sha_256(buf, size);
+    for (int i = 0; i < 32; i++) {
+	std::cout << fmt::format("{:02x}", static_cast<uint8_t>(hash[i]));
+    }
     std::cout << "  " << argv[1] << "\n";
 }
-
