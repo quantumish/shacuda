@@ -23,10 +23,20 @@
 #define rotr(a,b) (((a) >> (b)) | ((a) << (32-(b))))
 
 #define dump_array(arr, len) for (size_t i = 1; i < len+1; i++) {	\
-    printf("%02x ", *(bytes+i-1));					\
+  printf("%02x ", *(bytes+i-1));					\
     if (i % 32 == 0) printf("\n");					\
   }									\
   printf("\n")
+
+template<typename T>
+void pdump_array(T* bytes, size_t len) {
+    for (size_t i = 1; i < len+1; i++) {
+	auto str = "{:0"+std::to_string(sizeof(T)*8)+"b} ";
+	std::cout << fmt::vformat(str, fmt::make_format_args(*(bytes+i-1)));
+	if (i % (64/(sizeof(T)*8)) == 0) std::cout << '\n';
+    }
+    std::cout << '\n';
+}
 
 __constant__ uint64_t k[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -105,17 +115,22 @@ __global__ void process(uint8_t* bytes, uint32_t* hash) {
 void cpu_process(uint8_t* bytes, uint32_t* hash) {
     uint32_t w[64] = {0};
     memcpy(w, bytes, 64);
+    for (int i = 0; i < 16; i++) {
+      w[i] = __builtin_bswap32(w[i]);
+    }
+    
     // w[i] = ((w[i]>>24)&0xff) | // move byte 3 to byte 0
     //   ((w[i]<<8)&0xff0000) | // move byte 1 to byte 2
     //   ((w[i]>>8)&0xff00) | // move byte 2 to byte 1
     //   ((w[i]<<24)&0xff000000); // byte 0 to byte 3
 
     for (int i = 16; i < 64; i++) {
-      uint32_t s0 = (rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >> 3));
-      uint32_t s1 = (rotr(w[i-2], 17) ^ rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
-      w[i] = w[i-16] + s0 + w[i-7] + s1;
+        uint32_t s0 = (rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >> 3));
+	uint32_t s1 = (rotr(w[i-2], 17) ^ rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
+	printf("%02x\n", w[i-16] + s0 + w[i-7] + s1);
+	w[i] = w[i-16] + s0 + w[i-7] + s1;
     }
-    dump_array<uint32_t>(w, 64);
+    pdump_array<uint32_t>(w, 64);
     
     uint32_t a[8] = {0};
     memcpy(a, hash, sizeof(uint32_t)*8);
@@ -172,6 +187,9 @@ int main(int argc, char** argv) {
 	  cudaDeviceSynchronize();
 	}
     } while (bytes_read = read(fd, buf, BUFFER_SIZE));
+    for (int i = 0; i < 8; i++) {
+	sha.hash[i] = __builtin_bswap32(sha.hash[i]);
+    }
     auto whee = reinterpret_cast<uint8_t*>(sha.hash);
     for (int i = 0; i < 32; i++) {
 	std::cout << fmt::format("{:02x}", whee[i]);
