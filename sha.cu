@@ -103,7 +103,8 @@ sha_ctx::sha_ctx(uint64_t length) :len(length) {
     ((x<<24)&0xff000000)			\
 
 __global__ void process(const uint8_t* bytes, uint32_t* w) {
-    uint32_t* w_adj = w+(threadIdx.x*64*sizeof(uint32_t));
+    uint32_t* w_adj = w+(blockIdx.y*gridDim.x*blockDim.x*64*4)+(blockIdx.x*blockDim.x*64*4)+(threadIdx.x*64*sizeof(uint32_t));
+    // printf("%d %d %d %d %d %d %lu\n", blockIdx.x, blockIdx.y, blockIdx.z, threadIdx.x, threadIdx.y, threadIdx.z, (blockIdx.y*gridDim.x*blockDim.x)+(blockIdx.x*blockDim.x)+(threadIdx.x));
     memcpy(w_adj, bytes+(threadIdx.x*64), 64);    
     for (int i = 0; i < 16; i++) w_adj[i] = bswap32(w_adj[i]);
     for (int i = 16; i < 64; i++) {
@@ -119,7 +120,7 @@ void sha_ctx::compress(uint32_t* w) {
     for (int i = 0; i < 64; i++) {
 	uint32_t s1 = (rotr(a[4], 6) ^ rotr(a[4], 11) ^ rotr(a[4], 25));
 	uint32_t ch = (a[4] & a[5]) ^ ((~a[4]) & a[6]);
-	uint32_t temp1 = a[7] + s1 + ch + k[i] + w[i];
+	uint32_t temp1 = a[7] + s1 + ch + k[i]; // + w[i];
 	uint32_t s0 = (rotr(a[0], 2) ^ rotr(a[0], 13) ^ rotr(a[0], 22));
 	uint32_t maj = (a[0] & a[1]) ^ (a[0] & a[2]) ^ (a[1] & a[2]);
 	uint32_t temp2 = s0 + maj;
@@ -131,7 +132,7 @@ void sha_ctx::compress(uint32_t* w) {
 }
 
 int main(int argc, char** argv) {
-    constexpr size_t BUFFER_SIZE = 32*1024;
+    constexpr size_t BUFFER_SIZE = 1073741824;
     int fd = open(argv[1], O_RDONLY | O_NONBLOCK);
     posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
     struct stat stat;
@@ -140,6 +141,8 @@ int main(int argc, char** argv) {
     uint8_t* buf;
     cudaMallocManaged((void**)&buf, BUFFER_SIZE);
     size_t bytes_read = read(fd, buf, BUFFER_SIZE);
+    uint32_t* w;
+    cudaMallocManaged(&w, 4096*64*sizeof(uint32_t));
     do {
 	if(bytes_read == (size_t)-1) {
 	    printf("Error reading file.");
@@ -150,24 +153,16 @@ int main(int argc, char** argv) {
 	    buf[bytes_read] = 0b10000000;
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
-	    uint32_t* w;
-	    cudaMallocManaged(&w, buffer_len*sizeof(uint32_t));
 	    process<<<1, buffer_len/64>>>(buf, w);
 	    cudaDeviceSynchronize();
-	    for (int i = 0; i < buffer_len/64; i++) {
-		sha.compress(w+(i*(sizeof(uint32_t)*64)));
-	    }
-	    cudaFree(w);
+	    for (int i = 0; i < buffer_len/64; i++) sha.compress(w+(i*(sizeof(uint32_t)*64)));
 	}
 	else {
-	    uint32_t* w;
-	    cudaMallocManaged(&w, 512*sizeof(uint32_t));
-	    process<<<1, 512>>>(buf, w);
+	    dim3 grid(8,8,1);
+	    dim3 block(64, 1, 1);
+	    process<<<grid, block>>>(buf, w);
 	    cudaDeviceSynchronize();
-	    for (int i = 0; i < 512; i++) {
-		sha.compress(w+(i*(sizeof(uint32_t)*64)));
-	    }
-	    cudaFree(w);
+	    for (int i = 0; i < 4096; i++) sha.compress(w+(i*(sizeof(uint32_t)*64)));
 	}
     } while ((bytes_read = read(fd, buf, BUFFER_SIZE)));
     for (int i = 0; i < 8; i++) sha.hash[i] = __builtin_bswap32(sha.hash[i]);
