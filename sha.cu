@@ -19,6 +19,8 @@
 #include <cuda_runtime_api.h>
 #include <cuda.h>
 #include <stdio.h>
+#include <sys/types.h>
+#include <sys/stat.h>
 
 #define rotr(a,b) (((a) >> (b)) | ((a) << (32-(b))))
 
@@ -62,8 +64,7 @@
     }									\
     printf("\n")
 
-
-__constant__ uint64_t k[64] = {
+uint64_t k[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
     0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
     0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
@@ -80,8 +81,7 @@ struct sha_ctx {
     uint64_t len;
 
     sha_ctx(uint64_t len);
-    void process(uint8_t* bytes);
-    void finalize(uint8_t* bytes);
+    void compress(uint32_t* w);
     void dump_hash();
 };
 
@@ -97,27 +97,31 @@ sha_ctx::sha_ctx(uint64_t length) :len(length) {
     hash[7] = 0x5be0cd19;
 }
 
-__global__ void process(uint8_t* bytes, uint32_t* hash) {
-    uint32_t w[64] = {0};
-    memcpy(w, bytes+(threadIdx.x*64), 64);
-    dump_array32(w, 64);
-    for (int i = 0; i < 16; i++) {
-	// bswap32
-	w[i] = ((w[i]>>24)&0xff) | // move byte 3 to byte 0
-	    ((w[i]<<8)&0xff0000) | // move byte 1 to byte 2
-	    ((w[i]>>8)&0xff00) | // move byte 2 to byte 1
-	    ((w[i]<<24)&0xff000000); // byte 0 to byte 3
+#define bswap32(x) ((x>>24)&0xff) |		\
+    ((x<<8)&0xff0000) |				\
+    ((x>>8)&0xff00) |				\
+    ((x<<24)&0xff000000)			\
+
+__global__ void process(const uint8_t* bytes, uint32_t* w) {
+    memcpy(w+(threadIdx.x*64*sizeof(uint32_t)), bytes+(threadIdx.x*64), 64);    
+    if (threadIdx.x == 1) {
+	dump_array8(bytes+64, 64);
+	dump_array32(w, 16);
+	printf("%p\n", w+(threadIdx.x*64*sizeof(uint32_t)));
     }
-    dump_array32(w, 64);
+    for (int i = 0; i < 16; i++) w[i] = bswap32(w[i]);
     for (int i = 16; i < 64; i++) {
 	uint32_t s0 = (rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >> 3));
 	uint32_t s1 = (rotr(w[i-2], 17) ^ rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
 	w[i] = w[i-16] + s0 + w[i-7] + s1;
-    }    
-    
-    uint32_t a[8] = {0};
-    memcpy(a, hash, sizeof(uint32_t)*8);
+    }
+    if (threadIdx.x == 1) dump_array32(w, 64);
+}
 
+void sha_ctx::compress(uint32_t* w) {
+//    dump_array32(w, 64);
+    uint32_t a[8] = {0};
+    memcpy(a, hash, 8*sizeof(uint32_t));
     for (int i = 0; i < 64; i++) {
 	uint32_t s1 = (rotr(a[4], 6) ^ rotr(a[4], 11) ^ rotr(a[4], 25));
 	uint32_t ch = (a[4] & a[5]) ^ ((~a[4]) & a[6]);
@@ -129,14 +133,18 @@ __global__ void process(uint8_t* bytes, uint32_t* hash) {
 	a[4] += temp1;
 	a[0] = temp1 + temp2;
     }
-    for (int i = 0; i < 8; i++) atomicAdd(hash+i, a[i]);
+//    dump_array32(a, 8);
+    for (int i = 0; i < 8; i++) hash[i] += a[i];
+    std::cout << hash[0] << "\n";
 }
 
 int main(int argc, char** argv) {
-    sha_ctx sha(10);
     constexpr size_t BUFFER_SIZE = 32*1024;
     int fd = open(argv[1], O_RDONLY | O_NONBLOCK);
     posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
+    struct stat stat;
+    fstat(fd, &stat);
+    sha_ctx sha(stat.st_size);
     uint8_t* buf;
     cudaMallocManaged((void**)&buf, BUFFER_SIZE);
     size_t bytes_read = read(fd, buf, BUFFER_SIZE);
@@ -150,13 +158,22 @@ int main(int argc, char** argv) {
 	    buf[bytes_read] = 0b10000000;
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
-	    process<<<1, buffer_len/64>>>(buf, sha.hash);
+	    std::cout << buffer_len << " " << buffer_len/64 << '\n';
+	    uint32_t* w;
+	    cudaMallocManaged(&w, buffer_len*sizeof(uint32_t));
+	    process<<<1, buffer_len/64>>>(buf, w);
+	    cudaDeviceSynchronize();
+	    printf("%p\n", w+(4*64));
+	    dump_array32(buf+64, 16);
+	    dump_array32(w+(4*64), 64);	    
+	    for (int i = 0; i < buffer_len/64; i++) {
+		sha.compress(w+(i*(sizeof(uint32_t)*64)));
+	    }
 	}
 	else {
-	  process<<<1, 512>>>(buf, sha.hash);
+	    // process<<<1, 512>>>(buf, sha.hash, hash);
 	}
-	cudaDeviceSynchronize();
-    } while (bytes_read = read(fd, buf, BUFFER_SIZE));
+    } while ((bytes_read = read(fd, buf, BUFFER_SIZE)));
     for (int i = 0; i < 8; i++) sha.hash[i] = __builtin_bswap32(sha.hash[i]);
     auto u8_ptr = reinterpret_cast<uint8_t*>(sha.hash);
     for (int i = 0; i < 32; i++) {
