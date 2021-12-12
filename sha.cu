@@ -103,23 +103,17 @@ sha_ctx::sha_ctx(uint64_t length) :len(length) {
     ((x<<24)&0xff000000)			\
 
 __global__ void process(const uint8_t* bytes, uint32_t* w) {
-    memcpy(w+(threadIdx.x*64*sizeof(uint32_t)), bytes+(threadIdx.x*64), 64);    
-    if (threadIdx.x == 1) {
-	dump_array8(bytes+64, 64);
-	dump_array32(w, 16);
-	printf("%p\n", w+(threadIdx.x*64*sizeof(uint32_t)));
-    }
-    for (int i = 0; i < 16; i++) w[i] = bswap32(w[i]);
+    uint32_t* w_adj = w+(threadIdx.x*64*sizeof(uint32_t));
+    memcpy(w_adj, bytes+(threadIdx.x*64), 64);    
+    for (int i = 0; i < 16; i++) w_adj[i] = bswap32(w_adj[i]);
     for (int i = 16; i < 64; i++) {
-	uint32_t s0 = (rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >> 3));
-	uint32_t s1 = (rotr(w[i-2], 17) ^ rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
-	w[i] = w[i-16] + s0 + w[i-7] + s1;
+	uint32_t s0 = (rotr(w_adj[i-15], 7) ^ rotr(w_adj[i-15], 18) ^ (w_adj[i-15] >> 3));
+	uint32_t s1 = (rotr(w_adj[i-2], 17) ^ rotr(w_adj[i-2], 19)  ^ (w_adj[i-2] >> 10));
+	w_adj[i] = w_adj[i-16] + s0 + w_adj[i-7] + s1;
     }
-    if (threadIdx.x == 1) dump_array32(w, 64);
 }
 
 void sha_ctx::compress(uint32_t* w) {
-//    dump_array32(w, 64);
     uint32_t a[8] = {0};
     memcpy(a, hash, 8*sizeof(uint32_t));
     for (int i = 0; i < 64; i++) {
@@ -133,9 +127,7 @@ void sha_ctx::compress(uint32_t* w) {
 	a[4] += temp1;
 	a[0] = temp1 + temp2;
     }
-//    dump_array32(a, 8);
     for (int i = 0; i < 8; i++) hash[i] += a[i];
-    std::cout << hash[0] << "\n";
 }
 
 int main(int argc, char** argv) {
@@ -158,20 +150,24 @@ int main(int argc, char** argv) {
 	    buf[bytes_read] = 0b10000000;
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
-	    std::cout << buffer_len << " " << buffer_len/64 << '\n';
 	    uint32_t* w;
 	    cudaMallocManaged(&w, buffer_len*sizeof(uint32_t));
 	    process<<<1, buffer_len/64>>>(buf, w);
 	    cudaDeviceSynchronize();
-	    printf("%p\n", w+(4*64));
-	    dump_array32(buf+64, 16);
-	    dump_array32(w+(4*64), 64);	    
 	    for (int i = 0; i < buffer_len/64; i++) {
 		sha.compress(w+(i*(sizeof(uint32_t)*64)));
 	    }
+	    cudaFree(w);
 	}
 	else {
-	    // process<<<1, 512>>>(buf, sha.hash, hash);
+	    uint32_t* w;
+	    cudaMallocManaged(&w, 512*sizeof(uint32_t));
+	    process<<<1, 512>>>(buf, w);
+	    cudaDeviceSynchronize();
+	    for (int i = 0; i < 512; i++) {
+		sha.compress(w+(i*(sizeof(uint32_t)*64)));
+	    }
+	    cudaFree(w);
 	}
     } while ((bytes_read = read(fd, buf, BUFFER_SIZE)));
     for (int i = 0; i < 8; i++) sha.hash[i] = __builtin_bswap32(sha.hash[i]);
