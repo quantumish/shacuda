@@ -76,7 +76,6 @@ uint64_t k[64] = {
 };
 
 struct sha_ctx {
-    // std::unique_ptr<uint8_t[]> buffer;
     uint32_t* hash;
     uint64_t len;
 
@@ -104,7 +103,6 @@ sha_ctx::sha_ctx(uint64_t length) :len(length) {
 
 __global__ void process(const uint8_t* bytes, uint32_t* w) {
     size_t chunk = ((blockIdx.y*gridDim.x*blockDim.x)+(blockIdx.x*blockDim.x)+threadIdx.x);
-//    printf("%lu\n", chunk);
     uint32_t* w_adj = w+(chunk*64);    
     memcpy(w_adj, bytes+(chunk*64), 64);    
     for (int i = 0; i < 16; i++) w_adj[i] = bswap32(w_adj[i]);
@@ -133,19 +131,22 @@ void sha_ctx::compress(uint32_t* w) {
 }
 
 int main(int argc, char** argv) {
-    constexpr size_t BUFFER_SIZE = 8*8*64*64;
     int fd = open(argv[1], O_RDONLY | O_NONBLOCK);
     posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
     struct stat stat;
     fstat(fd, &stat);
+    
     sha_ctx sha(stat.st_size);
+
     uint8_t* buf;
-    cudaMallocManaged((void**)&buf, BUFFER_SIZE);
-    size_t bytes_read = read(fd, buf, BUFFER_SIZE);
+    constexpr size_t BUFFER_SIZE = 8*8*64*64;
+    cudaMallocManaged(&buf, BUFFER_SIZE);
     uint32_t* w;
     cudaMallocManaged(&w, 4096*(64*4));
+    
+    size_t bytes_read = read(fd, buf, BUFFER_SIZE);
     do {
-	if(bytes_read == (size_t)-1) {
+	if (bytes_read == (size_t)-1) {
 	    printf("Error reading file.");
 	    exit(1);
 	}
@@ -155,14 +156,20 @@ int main(int argc, char** argv) {
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
 	    dim3 block(buffer_len/64, 1, 1);
-	    std::cout << buffer_len/64 << "\n";
 	    std::cout << (buffer_len/64)/1024 << " " << (buffer_len/64)%1024 << "\n";
+	    size_t num_even_chunks = (buffer_len/64)/1024;
 	    for (int i = 0; i < (buffer_len/64)/1024; i++) {
-		process<<<1, 1024>>>(buf, w);
+		process<<<1, 1024>>>(buf, w+(i*1024*64));
 	    }
-	    process<<<1, (buffer_len/64)%1024>>>(buf, w);
+	    std::cout << (((buffer_len/64)/1024)*1024)+((buffer_len/64)%1024) << "\n";
+	    process<<<1, (buffer_len/64)%1024>>>(buf, w+num_even_chunks*64);	    
 	    cudaDeviceSynchronize();
-	    for (int i = 0; i < buffer_len/64; i++) sha.compress(w+(i*64));
+	    std::cout << buffer_len << "\n";
+	    for (int i = 0; i < buffer_len/64; i+=64) {
+		sha.compress(w+i);
+		std::cout << w+i+64 << "\n";
+	    }
+	    std::cout << "A: " << w+(((buffer_len/64)/1024)*1024)*64+((buffer_len/64)%1024)*64 << "\n";
 	} else {
 	    std::cout << "no" << "\n";
 	    dim3 grid(8,8,1);
