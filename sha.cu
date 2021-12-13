@@ -103,8 +103,8 @@ sha_ctx::sha_ctx(uint64_t length) :len(length) {
 
 __global__ void process(const uint8_t* bytes, uint32_t* w) {
     size_t chunk = ((blockIdx.y*gridDim.x*blockDim.x)+(blockIdx.x*blockDim.x)+threadIdx.x);
-    uint32_t* w_adj = w+(chunk*64);    
-    memcpy(w_adj, bytes+(chunk*64), 64);    
+    uint32_t* w_adj = w+(chunk*64);
+    memcpy(w_adj, bytes+(chunk*64), 64);
     for (int i = 0; i < 16; i++) w_adj[i] = bswap32(w_adj[i]);
     for (int i = 16; i < 64; i++) {
 	uint32_t s0 = (rotr(w_adj[i-15], 7) ^ rotr(w_adj[i-15], 18) ^ (w_adj[i-15] >> 3));
@@ -135,7 +135,7 @@ int main(int argc, char** argv) {
     posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
     struct stat stat;
     fstat(fd, &stat);
-    
+
     sha_ctx sha(stat.st_size);
 
     uint8_t* buf;
@@ -143,7 +143,7 @@ int main(int argc, char** argv) {
     cudaMallocManaged(&buf, BUFFER_SIZE);
     uint32_t* w;
     cudaMallocManaged(&w, 4096*(64*4));
-    
+
     size_t bytes_read = read(fd, buf, BUFFER_SIZE);
     do {
 	if (bytes_read == (size_t)-1) {
@@ -155,21 +155,17 @@ int main(int argc, char** argv) {
 	    buf[bytes_read] = 0b10000000;
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
-	    dim3 block(buffer_len/64, 1, 1);
-	    std::cout << (buffer_len/64)/1024 << " " << (buffer_len/64)%1024 << "\n";
-	    size_t num_even_chunks = (buffer_len/64)/1024;
-	    for (int i = 0; i < (buffer_len/64)/1024; i++) {
-		process<<<1, 1024>>>(buf, w+(i*1024*64));
-	    }
-	    std::cout << (((buffer_len/64)/1024)*1024)+((buffer_len/64)%1024) << "\n";
-	    process<<<1, (buffer_len/64)%1024>>>(buf, w+num_even_chunks*64);	    
+	    size_t num_even_groups = (buffer_len/64)/1024;
+	    // for (int i = 0; i < (buffer_len/64)/1024; i++) {
+	    // 	process<<<1, 1024>>>(buf, w+(i*1024*64));
+	    // }
+	    process<<<1, 1024>>>(buf, w);
+	    process<<<1, 1024>>>(buf, w+(1024*64));
+	    process<<<1, 250>>>(buf, w+(2048*64));
 	    cudaDeviceSynchronize();
-	    std::cout << buffer_len << "\n";
-	    for (int i = 0; i < buffer_len/64; i+=64) {
-		sha.compress(w+i);
-		std::cout << w+i+64 << "\n";
+	    for (int i = 0; i < buffer_len/64; i++) {
+		sha.compress(w+(i*64));
 	    }
-	    std::cout << "A: " << w+(((buffer_len/64)/1024)*1024)*64+((buffer_len/64)%1024)*64 << "\n";
 	} else {
 	    std::cout << "no" << "\n";
 	    dim3 grid(8,8,1);
@@ -178,7 +174,7 @@ int main(int argc, char** argv) {
 	    cudaDeviceSynchronize();
 	    for (int i = 0; i < 4096; i++) sha.compress(w+(i*64));
 	}
-        cudaError_t err = cudaGetLastError();
+	cudaError_t err = cudaGetLastError();
 	if (err != cudaSuccess) printf("%s\n", cudaGetErrorString(err));
     } while ((bytes_read = read(fd, buf, BUFFER_SIZE)));
     for (int i = 0; i < 8; i++) sha.hash[i] = __builtin_bswap32(sha.hash[i]);
