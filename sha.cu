@@ -155,7 +155,7 @@ int main(int argc, char** argv) {
 	    buf[bytes_read] = 0b10000000;
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
-	    size_t num_groups = (buffer_len/64)/1024;
+	    size_t num_groups = (buffer_len/64)/1024; 
 	    size_t group_shift = 1024*64;
 	    for (int i = 0; i < (buffer_len/64)/1024; i++) {
 		process<<<1, 1024>>>(buf+(i*group_shift), w+(i*group_shift));
@@ -163,19 +163,18 @@ int main(int argc, char** argv) {
 	    process<<<1, (buffer_len/64)%1024>>>(buf+num_groups*group_shift, w+num_groups*group_shift);	    
 	    cudaDeviceSynchronize();
 	    for (int i = 0; i < buffer_len/64; i++) {
+		if (i == buffer_len/64 - 1) dump_array32(w+(i*64), 64);
 		sha.compress(w+(i*64));
 	    }
 	} else {
-	    dim3 grid(8,8,1);
-	    dim3 block(64, 1, 1);
-	    process<<<grid, block>>>(buf, w);
+	    process<<<dim3{8,8,1}, 64>>>(buf, w);
 	    cudaDeviceSynchronize();
 	    for (int i = 0; i < 4096; i++) sha.compress(w+(i*64));
 	}
 	cudaError_t err = cudaGetLastError();
 	if (err != cudaSuccess) printf("%s\n", cudaGetErrorString(err));
     } while ((bytes_read = read(fd, buf, BUFFER_SIZE)));
-    for (int i = 0; i < 8; i++) sha.hash[i] = __builtin_bswap32(sha.hash[i]);
+    for (int i = 0; i < 8; i++) sha.hash[i] = bswap32(sha.hash[i]);
     auto u8_ptr = reinterpret_cast<uint8_t*>(sha.hash);
     for (int i = 0; i < 32; i++) {
 	std::cout << fmt::format("{:02x}", u8_ptr[i]);
