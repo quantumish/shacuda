@@ -155,19 +155,17 @@ int main(int argc, char** argv) {
 	    buf[bytes_read] = 0b10000000;
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
-	    size_t num_even_groups = (buffer_len/64)/1024;
-	    // for (int i = 0; i < (buffer_len/64)/1024; i++) {
-	    // 	process<<<1, 1024>>>(buf, w+(i*1024*64));
-	    // }
-	    process<<<1, 1024>>>(buf, w);
-	    process<<<1, 1024>>>(buf, w+(1024*64));
-	    process<<<1, 250>>>(buf, w+(2048*64));
+	    size_t num_groups = (buffer_len/64)/1024;
+	    size_t group_shift = 1024*64;
+	    for (int i = 0; i < (buffer_len/64)/1024; i++) {
+		process<<<1, 1024>>>(buf+(i*group_shift), w+(i*group_shift));
+	    }
+	    process<<<1, (buffer_len/64)%1024>>>(buf+num_groups*group_shift, w+num_groups*group_shift);	    
 	    cudaDeviceSynchronize();
 	    for (int i = 0; i < buffer_len/64; i++) {
 		sha.compress(w+(i*64));
 	    }
 	} else {
-	    std::cout << "no" << "\n";
 	    dim3 grid(8,8,1);
 	    dim3 block(64, 1, 1);
 	    process<<<grid, block>>>(buf, w);
