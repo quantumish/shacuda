@@ -52,15 +52,15 @@
 #define PRINTF_BYTE_TO_BINARY_INT64(i) \
     PRINTF_BYTE_TO_BINARY_INT32((i) >> 32), PRINTF_BYTE_TO_BINARY_INT32(i)
 
-#define dump_array32(arr, len) for (size_t i = 1; i < len+1; i++) { \
-	printf("" PRINTF_BINARY_PATTERN_INT32 " ", PRINTF_BYTE_TO_BINARY_INT32(*(arr+i-1))); \
-	if (i % 2 == 0) printf("\n");					\
+#define dump_array32(arr, len) for (size_t DUMP32_ITER = 1; DUMP32_ITER < len+1; DUMP32_ITER++) { \
+	printf("" PRINTF_BINARY_PATTERN_INT32 " ", PRINTF_BYTE_TO_BINARY_INT32(*(arr+DUMP32_ITER-1))); \
+	if (DUMP32_ITER % 2 == 0) printf("\n");				\
     }									\
     printf("\n")
 
-#define dump_array8(arr, len) for (size_t i = 1; i < len+1; i++) { \
-	printf("" PRINTF_BINARY_PATTERN_INT8 " ", PRINTF_BYTE_TO_BINARY_INT8(*(arr+i-1))); \
-	if (i % 8 == 0) printf("\n");					\
+#define dump_array8(arr, len) for (size_t DUMP8_ITER = 1; DUMP8_ITER < len+1; DUMP8_ITER++) { \
+	printf("" PRINTF_BINARY_PATTERN_INT8 " ", PRINTF_BYTE_TO_BINARY_INT8(*(arr+DUMP8_ITER-1))); \
+	if (DUMP8_ITER % 8 == 0) printf("\n");					\
     }									\
     printf("\n")
 
@@ -154,6 +154,7 @@ int main(int argc, char** argv) {
 	else if (bytes_read < BUFFER_SIZE) {
 	    buf[bytes_read] = 0b10000000;
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
+	    for (size_t i = bytes_read; i < buffer_len; i++) buf[i] = 0;
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
 	    size_t num_groups = (buffer_len/64)/1024; 
 	    size_t group_shift = 1024*64;
@@ -163,14 +164,20 @@ int main(int argc, char** argv) {
 	    process<<<1, (buffer_len/64)%1024>>>(buf+num_groups*group_shift, w+num_groups*group_shift);	    
 	    cudaDeviceSynchronize();
 	    for (int i = 0; i < buffer_len/64; i++) {
-		if (i == buffer_len/64 - 1) dump_array32(w+(i*64), 64);
+		if (i == (buffer_len/64)-1) {
+		    dump_array32(w+(i*64), 64);
+		    dump_array8(buf+(i*64), 64);
+		    dump_array8(buf+(buffer_len-64), 64);
+		    std::cout << &buf+(i*64) << " " << &buf+(buffer_len-64) << '\n';
+		    exit(1);
+		}
 		sha.compress(w+(i*64));
-	    }
+	    }	    
 	} else {
 	    process<<<dim3{8,8,1}, 64>>>(buf, w);
 	    cudaDeviceSynchronize();
 	    for (int i = 0; i < 4096; i++) sha.compress(w+(i*64));
-	}
+	}	
 	cudaError_t err = cudaGetLastError();
 	if (err != cudaSuccess) printf("%s\n", cudaGetErrorString(err));
     } while ((bytes_read = read(fd, buf, BUFFER_SIZE)));
