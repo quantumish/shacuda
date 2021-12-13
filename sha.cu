@@ -104,9 +104,8 @@ sha_ctx::sha_ctx(uint64_t length) :len(length) {
 
 __global__ void process(const uint8_t* bytes, uint32_t* w) {
     size_t chunk = ((blockIdx.y*gridDim.x*blockDim.x)+(blockIdx.x*blockDim.x)+threadIdx.x);
-    uint32_t* w_adj = w+(chunk*(64*4));    
-    //printf("%lu\n", chunk);
-    // if (w_adj > w + 1048576) printf("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAa\n");
+//    printf("%lu\n", chunk);
+    uint32_t* w_adj = w+(chunk*64);    
     memcpy(w_adj, bytes+(chunk*64), 64);    
     for (int i = 0; i < 16; i++) w_adj[i] = bswap32(w_adj[i]);
     for (int i = 16; i < 64; i++) {
@@ -155,17 +154,22 @@ int main(int argc, char** argv) {
 	    buf[bytes_read] = 0b10000000;
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
-	    dim3 grid(1,1,1);
 	    dim3 block(buffer_len/64, 1, 1);
-	    process<<<grid, block>>>(buf, w);
+	    std::cout << buffer_len/64 << "\n";
+	    std::cout << (buffer_len/64)/1024 << " " << (buffer_len/64)%1024 << "\n";
+	    for (int i = 0; i < (buffer_len/64)/1024; i++) {
+		process<<<1, 1024>>>(buf, w);
+	    }
+	    process<<<1, (buffer_len/64)%1024>>>(buf, w);
 	    cudaDeviceSynchronize();
-	    for (int i = 0; i < buffer_len/64; i++) sha.compress(w+(i*(sizeof(uint32_t)*64)));
+	    for (int i = 0; i < buffer_len/64; i++) sha.compress(w+(i*64));
 	} else {
+	    std::cout << "no" << "\n";
 	    dim3 grid(8,8,1);
 	    dim3 block(64, 1, 1);
 	    process<<<grid, block>>>(buf, w);
 	    cudaDeviceSynchronize();
-	    for (int i = 0; i < 4096; i++) sha.compress(w+(i*(sizeof(uint32_t)*64)));
+	    for (int i = 0; i < 4096; i++) sha.compress(w+(i*64));
 	}
         cudaError_t err = cudaGetLastError();
 	if (err != cudaSuccess) printf("%s\n", cudaGetErrorString(err));
