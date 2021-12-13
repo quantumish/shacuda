@@ -127,7 +127,20 @@ void sha_ctx::compress(uint32_t* w) {
 	a[4] += temp1;
 	a[0] = temp1 + temp2;
     }
-    for (int i = 0; i < 8; i++) hash[i] += a[i];
+    for (int i = 0; i < 8; i++) {
+	hash[i] += a[i];
+    }
+}
+
+void sha_ctx::dump_hash() {
+    uint32_t temp_hash[8];
+    memcpy(temp_hash, hash, 8*sizeof(uint32_t));
+    for (int i = 0; i < 8; i++) temp_hash[i] = bswap32(temp_hash[i]);
+    auto u8_ptr = reinterpret_cast<uint8_t*>(temp_hash);
+    for (int i = 0; i < 32; i++) {
+	std::cout << fmt::format("{:02x}", u8_ptr[i]);
+    }
+    std::cout << "\n";
 }
 
 int main(int argc, char** argv) {
@@ -143,7 +156,6 @@ int main(int argc, char** argv) {
     cudaMallocManaged(&buf, BUFFER_SIZE);
     uint32_t* w;
     cudaMallocManaged(&w, 4096*(64*4));
-
     size_t bytes_read = read(fd, buf, BUFFER_SIZE);
     do {
 	if (bytes_read == (size_t)-1) {
@@ -152,9 +164,9 @@ int main(int argc, char** argv) {
 	}
 	if (!bytes_read) break;
 	else if (bytes_read < BUFFER_SIZE) {
-	    buf[bytes_read] = 0b10000000;
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
 	    for (size_t i = bytes_read; i < buffer_len; i++) buf[i] = 0;
+	    buf[bytes_read] = 0b10000000;
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
 	    size_t num_groups = (buffer_len/64)/1024; 
 	    size_t group_shift = 1024*64;
@@ -163,16 +175,7 @@ int main(int argc, char** argv) {
 	    }
 	    process<<<1, (buffer_len/64)%1024>>>(buf+num_groups*group_shift, w+num_groups*group_shift);	    
 	    cudaDeviceSynchronize();
-	    for (int i = 0; i < buffer_len/64; i++) {
-		if (i == (buffer_len/64)-1) {
-		    dump_array32(w+(i*64), 64);
-		    dump_array8(buf+(i*64), 64);
-		    dump_array8(buf+(buffer_len-64), 64);
-		    std::cout << &buf+(i*64) << " " << &buf+(buffer_len-64) << '\n';
-		    exit(1);
-		}
-		sha.compress(w+(i*64));
-	    }	    
+	    for (int i = 0; i < buffer_len/64; i++) sha.compress(w+(i*64));
 	} else {
 	    process<<<dim3{8,8,1}, 64>>>(buf, w);
 	    cudaDeviceSynchronize();
