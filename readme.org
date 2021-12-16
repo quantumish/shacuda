@@ -22,6 +22,37 @@ nvcc sha.cu -o shacuda -O3
 
 
 *  design
+** high level overview of SHA
+First, you initialize an array of 8 32-bit integers that will represent the hash to the first 32 bits of the fractional parts of the square roots of the first 8 primes. We also initialize a constant array =k= that is the first 32 bits of the fractional parts of the cube roots of the first 64 primes.
+   
+SHA256 processes the input in 512-bit chunks, and for each chunk we generate a /message schedule/, an array of 64 32-bit integers. The first 16 integers in this array are just copied from the input buffer. The next 48 are calculated via the following process (where =rotr= is a right bit rotation, aka a cyclic right bit shift): 
+#+begin_src c++
+  for (int i = 16; i < 64; i++) {
+      uint32_t s0 = (rotr(w[i-15], 7) ^ rotr(w[i-15], 18) ^ (w[i-15] >> 3));
+      uint32_t s1 = (rotr(w[i-2], 17) ^ rotr(w[i-2], 19)  ^ (w[i-2] >> 10));
+      w[i] = w[i-16] + s0 + w[i-7] + s1;
+  }
+#+end_src
+
+This message schedule is then used in the /compression/ phase of SHA256 where the current hash values are copied into another array =a= and operated on 64 times (once for each element in the message schedule and =k=). This is done as follows:
+#+begin_src c++
+  for (int i = 0; i < 64; i++) {
+      uint32_t s1 = (rotr(a[4], 6) ^ rotr(a[4], 11) ^ rotr(a[4], 25));
+      uint32_t ch = (a[4] & a[5]) ^ ((~a[4]) & a[6]);
+      uint32_t temp1 = a[7] + s1 + ch + k[i] + w[i];
+      uint32_t s0 = (rotr(a[0], 2) ^ rotr(a[0], 13) ^ rotr(a[0], 22));
+      uint32_t maj = (a[0] & a[1]) ^ (a[0] & a[2]) ^ (a[1] & a[2]);
+      uint32_t temp2 = s0 + maj;
+      for (int i = 7; i > 0; i--) a[i] = a[i-1];
+      a[4] += temp1;
+      a[0] = temp1 + temp2;
+  }
+#+end_src 
+Sidenote: because =a= is initialized to the current hash, this process is inherently sequential.
+
+Afterwards, we add each element of  =a= to the hash. Finally, the last buffer is padded with an extra 1 bit after the input and the length of the array is stored in the last 64 bits of the 512-bit chunk. 
+   
+  
 ** this implementation
 =shacuda= uses a =sha_ctx= class to store the hash.
 
