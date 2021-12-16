@@ -15,14 +15,19 @@
 
 using Hash = std::unique_ptr<uint8_t[]>;
 
-// Blatantly adapted from https://qvault.io/cryptography/how-sha-2-works-step-by-step-sha-256/
+/* 
+ * Hashes a buffer. 
+ * Takes: 
+ * - `bytes`, a buffer to hash.
+ * - `len`, the length of the buffer.
+ * Adapted from https://qvault.io/cryptography/how-sha-2-works-step-by-step-sha-256/
+ */
 Hash sha_256(char* bytes, uint64_t len) {
     size_t content_len = len + 1 + 8;
     size_t buffer_len = 64 * ((content_len / 64) + 1);
     uint8_t* buffer = (uint8_t*)calloc(buffer_len, sizeof(uint8_t));
     memcpy(buffer, bytes, len);
     buffer[len] = 0b10000000;
-
     for (int i = 1; i <= 8; i++) buffer[buffer_len-i] = len*8 >> (i-1)*8;
 
     uint32_t h[8] = {
