@@ -1,0 +1,43 @@
+* shacuda
+Implementation of SHA-256 on the GPU (and sample implementation on the CPU).
+
+* building
+To compile the CPU version of the code:
+#+begin_src sh
+g++ sha.cpp -o shacpu -O3
+#+end_src
+
+The GPU version of the code was designed for a Nvidia 2080Ti, and likely will not run on any older hardware since it attempts to use the maximum number of threads possible per block for the "cleanup" kernels that handle the last buffer. To compile it, run:
+#+begin_src sh
+nvcc sha.cu -o shacuda -O3
+#+end_src
+
+* usage
+#+begin_src sh
+  # for GPU version 
+  ./shacuda <path-to-file>
+  # for CPU version 
+  ./shacpu <path-to-file>
+#+end_src
+
+
+*  design
+** this implementation
+=shacuda= uses a =sha_ctx= class to store the hash.
+
+When run, the code starts by calling =fstat= on the file provided to determine its size. It then allocates two large buffers on the GPU: a 0.25 GiB one called =buf= that the file is continously read into, and another 1 GiB one =w= that is meant to store all of the message schedules for the file.
+
+The primary part of the code is a do-while loop in the main function that continously reads the file to =buf=. Within this while loop there are essentially two conditions handled: whether the was fully or partially read into.
+
+If the buffer is full, we call a kernel =process= with a grid of 8x8 thread blocks with 64 threads (in total 4096 threads). Each thread is responsible for generating the message schedule for 1024 of the 512-bit  "chunks" that SHA operates on. To do this, they calculate their "thread index" (essentially determining which thread they are), and generate from this a unique offset in the large =w= array to write their output into and offset in the =buf= array to read the input from. This means that the operation is parallelized in a rather clean manner: each thread is responsible for its own section of the input and own section of the output. Each thread then generates their respective message schedules via the method outlined by the SHA algorithm, albeit with some byte swapping because SHA operates on big endian numbers whilst x86 is little endian. Once this is done, a function running on the CPU does the "compression" phase of SHA by iterating over all of the generated message schedules in =w= sequentially and updating the hash in the =sha_ctx= class. Convieniently, we do not need to do all of our arithmetic mod 32 when doing math for these steps since 32-bit overflow is defined behavior in C/C++.
+
+If the buffer is not full, we pad it as SHA specifies by clearing out the input part of the =w= array, writing a 1 bit after the input and the length at the end of the 512-bit chunk. We then try to call =process= in decreasingly large chunks until we have covered all of it. 
+
+Finally, after this while loop we do a final chunk with the SHA padding if we only ever had filled buffers, and then we print out the hash!
+** drawbacks
+Since kernels are pretty expensive to call, there's a tradeoff between VRAM usage and how many kernels we call: we could have 5 gigabytes of VRAM allocated for the input and output buffers and then call less kernels to process the data (since they're each capable of working on more at a time), but a higher memory footprint.
+
+* next steps
+Neither optimization is nearly as optimized as I'd like it to be: being smarter about how kernels are called and doing some more extensive profiling would likely help speed things up quite a bit. Furthermore, I'd like to clean up the code some and also make it accesible as a library rather than just an executable to call.
+
+

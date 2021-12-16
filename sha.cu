@@ -8,7 +8,14 @@
 #include <cuda_runtime_api.h>
 #include <cuda.h>
 
+// 32-bit bit right rotation
 #define rotr(a,b) (((a) >> (b)) | ((a) << (32-(b))))
+
+// 32-bit byte swap
+#define bswap32(x) ((x>>24)&0xff) |		\
+    ((x<<8)&0xff0000) |				\
+    ((x>>8)&0xff00) |				\
+    ((x<<24)&0xff000000)			\
 
 uint64_t k[64] = {
     0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
@@ -22,29 +29,18 @@ uint64_t k[64] = {
 };
 
 struct sha_ctx {
-    uint32_t* hash;
-    uint64_t len;    
+    uint32_t hash[8] = {
+	0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a,
+        0x510e527f, 0x9b05688c, 0x1f83d9ab, 0x5be0cd19,
+    };
+    uint64_t len;
+    
     sha_ctx(uint64_t len);
     void compress(uint32_t* w);
     void dump_hash();
 };
 
-sha_ctx::sha_ctx(uint64_t length) :len(length) {
-    cudaMallocManaged((void**)&hash, 8*sizeof(uint32_t));
-    hash[0] = 0x6a09e667;
-    hash[1] = 0xbb67ae85;
-    hash[2] = 0x3c6ef372;
-    hash[3] = 0xa54ff53a;
-    hash[4] = 0x510e527f;
-    hash[5] = 0x9b05688c;
-    hash[6] = 0x1f83d9ab;
-    hash[7] = 0x5be0cd19;
-}
-
-#define bswap32(x) ((x>>24)&0xff) |		\
-    ((x<<8)&0xff0000) |				\
-    ((x>>8)&0xff00) |				\
-    ((x<<24)&0xff000000)			\
+sha_ctx::sha_ctx(uint64_t length) :len(length) {}
 
 __global__ void process(const uint8_t* bytes, uint32_t* w, uint32_t iters) {
     const size_t start_chunk = (blockIdx.y*gridDim.x*blockDim.x)+(blockIdx.x*blockDim.x)+threadIdx.x;
@@ -90,15 +86,16 @@ int main(int argc, char** argv) {
     posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
     struct stat stat;
     fstat(fd, &stat);
-
     sha_ctx sha(stat.st_size);
-    const size_t BUFFER_SIZE = 268435456;
-    uint8_t* buf;
+    
+    const size_t BUFFER_SIZE = 268435456; // 2 GiB
+    uint8_t* buf; 
     cudaMallocManaged(&buf, BUFFER_SIZE);
     uint32_t* w;
     cudaMallocManaged(&w, BUFFER_SIZE*4);
-    size_t bytes_read = read(fd, buf, BUFFER_SIZE);
+    size_t bytes_read = read(fd, buf, BUFFER_SIZE);    
     bool padded = false;
+
     do {
 	if (bytes_read == (size_t)-1) {
 	    printf("Error reading file.");
