@@ -42,6 +42,14 @@ struct sha_ctx {
 
 sha_ctx::sha_ctx(uint64_t length) :len(length) {}
 
+/*
+ * GPU Kernel responsible for generating message schedules.
+ * Takes:
+ * - `bytes`, a pointer to a buffer containing the input from the file.
+ * - `w`, a pointer to the large buffer to write all the message schedules to.
+ * - `iters`, the number of message schedules to generate per thread.
+ * Does not return anything but instead modifies `w`
+ */
 __global__ void process(const uint8_t* bytes, uint32_t* w, uint32_t iters) {
     const size_t start_chunk = (blockIdx.y*gridDim.x*blockDim.x)+(blockIdx.x*blockDim.x)+threadIdx.x;
     for (int off = 0; off < iters; off++) {
@@ -56,6 +64,12 @@ __global__ void process(const uint8_t* bytes, uint32_t* w, uint32_t iters) {
     }
 }
 
+/*
+ * CPU-side function that updates the hash for a given message schedule.
+ * Takes:
+ * - `w`, a pointer to a single message schedule.
+ * Does not return anything but modifies `sha_ctx::hash`
+ */
 void sha_ctx::compress(uint32_t* w) {
     uint32_t a[8] = {0};
     memcpy(a, hash, 8*sizeof(uint32_t));
@@ -73,6 +87,10 @@ void sha_ctx::compress(uint32_t* w) {
     for (int i = 0; i < 8; i++) hash[i] += a[i];
 }
 
+/*
+ * CPU-side function that prints out the current hash.
+ * Returns nothing but writes to stdout.
+ */
 void sha_ctx::dump_hash() {
     uint32_t temp_hash[8];
     memcpy(temp_hash, hash, 8*sizeof(uint32_t));
@@ -82,31 +100,38 @@ void sha_ctx::dump_hash() {
 }
 
 int main(int argc, char** argv) {
+    // Open file and initialize sha_ctx
     int fd = open(argv[1], O_RDONLY | O_NONBLOCK);
-    posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL);
-    struct stat stat;
-    fstat(fd, &stat);
+    posix_fadvise(fd, 0, 0, POSIX_FADV_SEQUENTIAL); // Advise kernel we're reading sequentially
+    struct stat stat; 
+    fstat(fd, &stat); // Get size of file
     sha_ctx sha(stat.st_size);
-    
+
+    // Allocate input and message schedule buffers on the FPU
     const size_t BUFFER_SIZE = 268435456; // 2 GiB
     uint8_t* buf; 
     cudaMallocManaged(&buf, BUFFER_SIZE);
     uint32_t* w;
     cudaMallocManaged(&w, BUFFER_SIZE*4);
+
+    bool padded = false; // Store if we've padded the input yet (for handling edge cases)
     size_t bytes_read = read(fd, buf, BUFFER_SIZE);    
-    bool padded = false;
 
     do {
-	if (bytes_read == (size_t)-1) {
+        // Maximum size_t (represented by underflow here) is read's return code for error
+	if (bytes_read == (size_t)-1) { 
 	    printf("Error reading file.");
 	    exit(1);
 	}
-	if (!bytes_read) break;
+	if (!bytes_read) break; // If we're done reading, stop.
 	else if (bytes_read < BUFFER_SIZE) {
+	    // Pad buffer in accordance with SHA256's standards
 	    size_t buffer_len = 64 * (((bytes_read + 9) / 64) + 1);
 	    for (size_t i = bytes_read; i < buffer_len; i++) buf[i] = 0;
 	    buf[bytes_read] = 0b10000000;
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
+
+	    // Spawn a decreasing amount of kernels to wrap up processing
 	    int threads[3] = {1024, 128, 1024};
 	    int iters[3] = {1024, 1024, 1};
 	    size_t remaining = buffer_len/64;
@@ -130,9 +155,12 @@ int main(int argc, char** argv) {
 	}
     } while ((bytes_read = read(fd, buf, BUFFER_SIZE)));
     if (padded == false) {
+        // Pad buffer in accordance with SHA256
 	for (size_t i = 0; i < 64; i++) buf[i] = 0;
 	buf[0] = 0b10000000;
 	for (int i = 1; i <= 8; i++) buf[64-i] = sha.len*8 >> (i-1)*8;
+
+	// Run last chunk on CPU
 	memcpy(w, buf, 64);
 	for (int i = 0; i < 16; i++) w[i] = bswap32(w[i]);
 	for (int i = 16; i < 64; i++) {
