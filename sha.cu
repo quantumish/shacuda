@@ -29,28 +29,24 @@
 //https://stackoverflow.com/questions/111928/is-there-a-printf-converter-to-print-in-binary-format/25108449#25108449
 #define PRINTF_BINARY_SEPARATOR ""
 #define PRINTF_BINARY_PATTERN_INT8 "%c%c%c%c%c%c%c%c"
-#define PRINTF_BYTE_TO_BINARY_INT8(i)    \
-    (((i) & 0x80ll) ? '1' : '0'), \
-    (((i) & 0x40ll) ? '1' : '0'), \
-    (((i) & 0x20ll) ? '1' : '0'), \
-    (((i) & 0x10ll) ? '1' : '0'), \
-    (((i) & 0x08ll) ? '1' : '0'), \
-    (((i) & 0x04ll) ? '1' : '0'), \
-    (((i) & 0x02ll) ? '1' : '0'), \
-    (((i) & 0x01ll) ? '1' : '0')
+#define PRINTF_BYTE_TO_BINARY_INT8(BYTE)	\
+    (((BYTE) & 0x80ll) ? '1' : '0'),		\
+    (((BYTE) & 0x40ll) ? '1' : '0'),		\
+    (((BYTE) & 0x20ll) ? '1' : '0'),		\
+    (((BYTE) & 0x10ll) ? '1' : '0'),		\
+    (((BYTE) & 0x08ll) ? '1' : '0'),		\
+    (((BYTE) & 0x04ll) ? '1' : '0'),		\
+    (((BYTE) & 0x02ll) ? '1' : '0'),		\
+    (((BYTE) & 0x01ll) ? '1' : '0')
 
 #define PRINTF_BINARY_PATTERN_INT16 \
     PRINTF_BINARY_PATTERN_INT8               PRINTF_BINARY_SEPARATOR              PRINTF_BINARY_PATTERN_INT8
-#define PRINTF_BYTE_TO_BINARY_INT16(i) \
-    PRINTF_BYTE_TO_BINARY_INT8((i) >> 8),   PRINTF_BYTE_TO_BINARY_INT8(i)
+#define PRINTF_BYTE_TO_BINARY_INT16(BYTE) \
+    PRINTF_BYTE_TO_BINARY_INT8((BYTE) >> 8),   PRINTF_BYTE_TO_BINARY_INT8(BYTE)
 #define PRINTF_BINARY_PATTERN_INT32 \
     PRINTF_BINARY_PATTERN_INT16              PRINTF_BINARY_SEPARATOR              PRINTF_BINARY_PATTERN_INT16
-#define PRINTF_BYTE_TO_BINARY_INT32(i) \
-    PRINTF_BYTE_TO_BINARY_INT16((i) >> 16), PRINTF_BYTE_TO_BINARY_INT16(i)
-#define PRINTF_BINARY_PATTERN_INT64    \
-    PRINTF_BINARY_PATTERN_INT32              PRINTF_BINARY_SEPARATOR              PRINTF_BINARY_PATTERN_INT32
-#define PRINTF_BYTE_TO_BINARY_INT64(i) \
-    PRINTF_BYTE_TO_BINARY_INT32((i) >> 32), PRINTF_BYTE_TO_BINARY_INT32(i)
+#define PRINTF_BYTE_TO_BINARY_INT32(BYTE) \
+    PRINTF_BYTE_TO_BINARY_INT16((BYTE) >> 16), PRINTF_BYTE_TO_BINARY_INT16(BYTE)
 
 #define dump_array32(arr, len) for (size_t DUMP32_ITER = 1; DUMP32_ITER < len+1; DUMP32_ITER++) { \
 	printf("" PRINTF_BINARY_PATTERN_INT32 " ", PRINTF_BYTE_TO_BINARY_INT32(*(arr+DUMP32_ITER-1))); \
@@ -59,8 +55,8 @@
     printf("\n")
 
 #define dump_array8(arr, len) for (size_t DUMP8_ITER = 1; DUMP8_ITER < len+1; DUMP8_ITER++) { \
-	printf("" PRINTF_BINARY_PATTERN_INT8 " ", PRINTF_BYTE_TO_BINARY_INT8(*(arr+DUMP8_ITER-1))); \
-	if (DUMP8_ITER % 8 == 0) printf("\n");					\
+	printf("" PRINTF_BINARY_PATTERN_INT8 " ", PRINTF_BYTE_TO_BINARY_INT8(*(arr+DUMP8_ITER-1)));                       \
+	if (DUMP8_ITER % 8 == 0) printf("\n");				\
     }									\
     printf("\n")
 
@@ -101,17 +97,29 @@ sha_ctx::sha_ctx(uint64_t length) :len(length) {
     ((x>>8)&0xff00) |				\
     ((x<<24)&0xff000000)			\
 
+#define BUFFER_SIZE 268435456
+
 __global__ void process(const uint8_t* bytes, uint32_t* w) {
-    size_t chunk = ((blockIdx.y*gridDim.x*blockDim.x)+(blockIdx.x*blockDim.x)+threadIdx.x);
-    uint32_t* w_adj = w+(chunk*64);
-    memcpy(w_adj, bytes+(chunk*64), 64);
-    for (int i = 0; i < 16; i++) w_adj[i] = bswap32(w_adj[i]);
-    for (int i = 16; i < 64; i++) {
-	uint32_t s0 = (rotr(w_adj[i-15], 7) ^ rotr(w_adj[i-15], 18) ^ (w_adj[i-15] >> 3));
-	uint32_t s1 = (rotr(w_adj[i-2], 17) ^ rotr(w_adj[i-2], 19)  ^ (w_adj[i-2] >> 10));
-	w_adj[i] = w_adj[i-16] + s0 + w_adj[i-7] + s1;
+    const size_t start_chunk = (blockIdx.y*gridDim.x*blockDim.x)+(blockIdx.x*blockDim.x)+threadIdx.x; 
+    for (int off = 0; off < 1024; off++) { // Doesn't actually iterate 2 times??
+	// printf("wtf\n");
+	// Perhaps sketchy, but shouldn't affect `off` in any way.
+	uint32_t* w_adj = w+(((start_chunk*1024)+off)*64);
+	memcpy(w_adj, bytes+(((start_chunk*1024)+off)*64), 64);
+	assert(w_adj < w+BUFFER_SIZE*4);
+	assert(bytes+(((start_chunk*1024)+off)*64) < bytes+BUFFER_SIZE);
+	assert(w_adj < w+((start_chunk*1024)+1024)*64);
+	assert(bytes+(((start_chunk*1024)+off)*64) < bytes+((start_chunk*1024)+1024)*64);
+	// Logic from here on down is sound.
+	for (int i = 0; i < 16; i++) w_adj[i] = bswap32(w_adj[i]);
+	for (int i = 16; i < 64; i++) {
+	    uint32_t s0 = (rotr(w_adj[i-15], 7) ^ rotr(w_adj[i-15], 18) ^ (w_adj[i-15] >> 3));
+	    uint32_t s1 = (rotr(w_adj[i-2], 17) ^ rotr(w_adj[i-2], 19)  ^ (w_adj[i-2] >> 10));
+	    w_adj[i] = w_adj[i-16] + s0 + w_adj[i-7] + s1;
+	}
     }
 }
+
 
 void sha_ctx::compress(uint32_t* w) {
     uint32_t a[8] = {0};
@@ -127,9 +135,7 @@ void sha_ctx::compress(uint32_t* w) {
 	a[4] += temp1;
 	a[0] = temp1 + temp2;
     }
-    for (int i = 0; i < 8; i++) {
-	hash[i] += a[i];
-    }
+    for (int i = 0; i < 8; i++) hash[i] += a[i];
 }
 
 void sha_ctx::dump_hash() {
@@ -151,11 +157,11 @@ int main(int argc, char** argv) {
 
     sha_ctx sha(stat.st_size);
 
-    uint8_t* buf;
-    constexpr size_t BUFFER_SIZE = 8*8*64*64;
+    uint8_t* buf;    
     cudaMallocManaged(&buf, BUFFER_SIZE);
     uint32_t* w;
-    cudaMallocManaged(&w, 4096*(64*4));
+    cudaMallocManaged(&w, BUFFER_SIZE*4);
+    std::cout << "alloc'd " << (float)(BUFFER_SIZE*5)/1048576 << " MiB\n";
     size_t bytes_read = read(fd, buf, BUFFER_SIZE);
     do {
 	if (bytes_read == (size_t)-1) {
@@ -168,21 +174,27 @@ int main(int argc, char** argv) {
 	    for (size_t i = bytes_read; i < buffer_len; i++) buf[i] = 0;
 	    buf[bytes_read] = 0b10000000;
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
-	    size_t num_groups = (buffer_len/64)/1024; 
-	    size_t group_shift = 1024*64;
-	    for (int i = 0; i < (buffer_len/64)/1024; i++) {
+	    size_t num_groups = (buffer_len/64)/(1024*1024);
+	    size_t group_shift = 1024*1024*64;
+	    for (int i = 0; i < (buffer_len/64)/(1024*1024); i++) {
+		std::cout << "spawned cleanup kernel\n";
 		process<<<1, 1024>>>(buf+(i*group_shift), w+(i*group_shift));
 	    }
-	    process<<<1, (buffer_len/64)%1024>>>(buf+num_groups*group_shift, w+num_groups*group_shift);	    
+	    std::cout << "spawned kernel\n";
+	    std::cout << (buffer_len/64)%(1024*1024) << '\n';
+	    process<<<1, (buffer_len/64)%(1024*1024)>>>(buf+num_groups*group_shift, w+num_groups*group_shift);
 	    cudaDeviceSynchronize();
 	    for (int i = 0; i < buffer_len/64; i++) sha.compress(w+(i*64));
 	} else {
+	    std::cout << "spawned kernel (main)\n";
 	    process<<<dim3{8,8,1}, 64>>>(buf, w);
 	    cudaDeviceSynchronize();
-	    for (int i = 0; i < 4096; i++) sha.compress(w+(i*64));
-	}	
-	cudaError_t err = cudaGetLastError();
-	if (err != cudaSuccess) printf("%s\n", cudaGetErrorString(err));
+	    
+	    cudaError_t err = cudaGetLastError();
+	    if (err != cudaSuccess) printf("%s\n", cudaGetErrorString(err));
+	    
+	    for (int i = 0; i < BUFFER_SIZE/64; i++) sha.compress(w+(i*64));
+	}
     } while ((bytes_read = read(fd, buf, BUFFER_SIZE)));
     for (int i = 0; i < 8; i++) sha.hash[i] = bswap32(sha.hash[i]);
     auto u8_ptr = reinterpret_cast<uint8_t*>(sha.hash);
