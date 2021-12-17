@@ -130,21 +130,7 @@ int main(int argc, char** argv) {
 	    for (size_t i = bytes_read; i < buffer_len; i++) buf[i] = 0;
 	    buf[bytes_read] = 0b10000000;
 	    for (int i = 1; i <= 8; i++) buf[buffer_len-i] = sha.len*8 >> (i-1)*8;
-
-	    // Spawn a decreasing amount of kernels to wrap up processing
-	    int threads[3] = {1024, 128, 1024};
-	    int iters[3] = {1024, 1024, 1};
-	    size_t remaining = buffer_len/64;
-	    size_t shift = 0;
-	    for (int i = 0; i < 3; i++) {
-		size_t num_groups = remaining/(threads[i]*iters[i]);
-		remaining = remaining % (threads[i]*iters[i]);
-		for (int j = 0; j < num_groups; j++) {
-		    process<<<1, threads[i]>>>(buf+shift, w+shift, iters[i]);
-		    shift += threads[i]*iters[i]*64;
-		}
-	    }
-	    process<<<1, remaining>>>(buf+shift, w+shift, 1);
+	    process<<<dim3{8,8,1}, 64>>>(buf, w, 1024);
 	    cudaDeviceSynchronize();
 	    for (int i = 0; i < buffer_len/64; i++) sha.compress(w+(i*64));
 	    padded=true;

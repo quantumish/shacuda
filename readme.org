@@ -7,7 +7,7 @@ To compile the CPU version of the code:
 g++ sha.cpp -o shacpu -std=c++20 -O3
 #+end_src
 
-The GPU version of the code was designed for a Nvidia 2080Ti, and likely will not run on any older hardware since it attempts to use the maximum number of threads possible per block for the "cleanup" kernels that handle the last buffer. To compile it, run:
+The GPU version of the code was designed for a Nvidia 2080Ti, and likely will not run on any older hardware since it attempts to use the maximum number of threads possible. To compile it, run:
 #+begin_src sh
 nvcc sha.cu -o shacuda -O3
 #+end_src
@@ -62,7 +62,7 @@ The primary part of the code is a do-while loop in the main function that contin
 
 If the buffer is full, we call a kernel =process= with a grid of 8x8 thread blocks with 64 threads (in total 4096 threads). Each thread is responsible for generating the message schedule for 1024 of the 512-bit  "chunks" that SHA operates on. To do this, they calculate their "thread index" (essentially determining which thread they are), and generate from this a unique offset in the large =w= array to write their output into and offset in the =buf= array to read the input from. This means that the operation is parallelized in a rather clean manner: each thread is responsible for its own section of the input and own section of the output. Each thread then generates their respective message schedules via the method outlined by the SHA algorithm, albeit with some byte swapping because SHA operates on big endian numbers whilst x86 is little endian. Once this is done, a function running on the CPU does the "compression" phase of SHA by iterating over all of the generated message schedules in =w= sequentially and updating the hash in the =sha_ctx= class. Convieniently, we do not need to do all of our arithmetic mod 32 when doing math for these steps since 32-bit overflow is defined behavior in C/C++.
 
-If the buffer is not full, we pad it as SHA specifies by clearing out the input part of the =w= array, writing a 1 bit after the input and the length at the end of the 512-bit chunk. We then try to call =process= in decreasingly large chunks until we have covered all of it. 
+If the buffer is not full, we pad it as SHA specifies by clearing out the input part of the =w= array, writing a 1 bit after the input and the length at the end of the 512-bit chunk. 
 
 Finally, after this while loop we do a final chunk with the SHA padding if we only ever had filled buffers, and then we print out the hash!
 ** drawbacks
